@@ -121,10 +121,12 @@
                       placeholder=""
                       readonly style="background:#e9ecef;"></textarea>
 
+            {% if print_barcode_enabled %}
             <button class="btn btn-outline-primary mt-3" onclick="printSampleBarcode()" id="btn-print-barcode">
               <span id="spinner-print-barcode" class="spinner-border spinner-border-sm d-none me-2" role="status"></span>
               Print Sample Barcode
             </button>
+            {% endif %}
 
           </div>
         </div>
@@ -210,14 +212,17 @@
     // -------------------------------------------------------------------------
     async function init() {
       const res = await fetch("/api/instruments");
-      const instruments = await res.json();
+      const data = await res.json();
       const sel = document.getElementById("instrument");
-      instruments.forEach(name => {
+      data.instruments.forEach(name => {
         const opt = document.createElement("option");
         opt.value = name;
         opt.textContent = name;
         sel.appendChild(opt);
       });
+      if (data.default) {
+        sel.value = data.default;
+      }
     }
 
     // -------------------------------------------------------------------------
@@ -447,7 +452,7 @@
             project_id,
             instrument_name,
             session_folder_path,
-            sample_unique_id: document.getElementById("sample-uid").value.trim(),
+            sample_unique_id: document.getElementById("sample-uid").value.trim() || null,
             comments: document.getElementById("comments").value.trim(),
           }),
         });
@@ -513,11 +518,12 @@
       document.getElementById("upload-modal-header").classList.add("bg-success", "text-white");
       document.getElementById("upload-modal-footer").classList.remove("d-none");
 
-      document.getElementById("crucible-link").href = baseUrl + "/" + projectId;
+      const datasetUrl = baseUrl + "/" + projectId + "/dataset/" + sessionDsid;
+      document.getElementById("crucible-link").href = datasetUrl;
       const qrContainer = document.getElementById("qr-code");
       qrContainer.innerHTML = "";
       new QRCode(qrContainer, {
-        text: sessionDsid,
+        text: datasetUrl,
         width: 256,
         height: 256,
       });

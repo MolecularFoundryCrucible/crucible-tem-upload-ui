@@ -12,13 +12,13 @@ from flask import Flask, Response, jsonify, render_template, request
 import json
 
 import backend
-from instrument_conf import DEFAULT_BROWSE_DIR
+from instrument_conf import DEFAULT_BROWSE_DIR, IS_SESSION, DEFAULT_INSTRUMENT_NAME, PRINT_BARCODE_ENABLED
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(funcName)s: %(message)s")
 
 app = Flask(__name__)
 
-INSTRUMENTS = ["titanx", "themis", "team1",  "team05"] # you can add your instrument here
+INSTRUMENTS = ["titanx", "themis", "team1",  "team05", "insitu_pl"] # you can add your instrument here
 # Tkinter must run on the main thread. Flask runs in a background thread.
 # We use two queues to hand off dialog requests/results between threads.
 _tk_root = tk.Tk()
@@ -33,10 +33,16 @@ def _check_browse_queue():
     """Called repeatedly on the main thread via tkinter's event loop."""
     try:
         _browse_request.get_nowait()
-        kwargs = {"master": _tk_root, "title": "Select session folder"}
-        if DEFAULT_BROWSE_DIR:
-            kwargs["initialdir"] = DEFAULT_BROWSE_DIR
-        path = filedialog.askdirectory(**kwargs)
+        if IS_SESSION:
+            kwargs = {"master": _tk_root, "title": "Select session folder"}
+            if DEFAULT_BROWSE_DIR:
+                kwargs["initialdir"] = DEFAULT_BROWSE_DIR
+            path = filedialog.askdirectory(**kwargs)
+        else:
+            kwargs = {"master": _tk_root, "title": "Select file"}
+            if DEFAULT_BROWSE_DIR:
+                kwargs["initialdir"] = DEFAULT_BROWSE_DIR
+            path = filedialog.askopenfilename(**kwargs)
         _browse_result.put(path or "")
     except queue.Empty:
         pass
@@ -45,12 +51,12 @@ def _check_browse_queue():
 
 @app.get("/")
 def index():
-    return render_template("index.html")
+    return render_template("index.html", print_barcode_enabled=PRINT_BARCODE_ENABLED)
 
 
 @app.get("/api/instruments")
 def get_instruments():
-    return jsonify(INSTRUMENTS)
+    return jsonify({"instruments": INSTRUMENTS, "default": DEFAULT_INSTRUMENT_NAME})
 
 
 @app.get("/api/browse")
@@ -121,7 +127,7 @@ def do_upload():
     orcid = data["orcid"].strip()
     project_id = data["project_id"].strip()
     instrument_name = data["instrument_name"].strip()
-    sample_unique_id = data.get("sample_unique_id", "").strip()
+    sample_unique_id = data.get("sample_unique_id", None)  
     session_folder_path = data["session_folder_path"].strip()
     comments = data.get("comments", "").strip()
     kw_list = []
@@ -146,49 +152,74 @@ def do_upload():
             except Exception as e:
                 backend.logger.error(e)
 
-            # Step 3: Identify session files
-            yield _sse("progress", {"step": "identify", "message": "Identifying session files...", "percent": 15})
-            session_files = backend.identify_session_files(session_folder_path)
-            total_files = len(session_files)
+            
+            if IS_SESSION is False:
+                session_id = None
+                file_name = session_folder_path
 
-            # Step 4: Create session dataset
-            yield _sse("progress", {"step": "session", "message": "Creating session in Crucible...", "percent": 20})
-            try:
-                session_name, session_id = backend.create_session(
-                    session_folder_path, kw_list, comments,
-                    orcid, project_id, instrument_name, sample_unique_id)
-            except Exception as e:
-                backend.logger.error(e)
-                yield _sse("error", {"error": f"Failed to create session: {e}"})
-                return
+                # Step 3: Upload the dataset
+                yield _sse("progress", {"step": "file", "message": f"Processing file {file_name}"})
+                try:
+                    new_dsid = backend.upload_dataset(
+                        session_folder_path, instrument_name, project_id, orcid,
+                        session_name = None, session_dsid = None, sample_unique_id = sample_unique_id, 
+                        kw_list = kw_list, comments = comments)
+                    
+                    yield _sse("complete", {"session_dsid": new_dsid, "project_id": project_id})
 
-            # Step 5: Process each file
-            if total_files == 0:
-                yield _sse("progress", {"step": "done", "message": "No data files found, session created.", "percent": 100})
+                except Exception as e:
+                    yield _sse("error", {"error": f"Failed on {file_name}: {e}"})
+                    return
+
+
             else:
-                for i, file in enumerate(session_files):
-                    file_name = Path(file).name
-                    base_percent = 25
-                    file_percent = base_percent + int((i + 1) / total_files * 75)
-                    yield _sse("progress", {
-                        "step": "file",
-                        "message": f"Processing file {i + 1}/{total_files}: {file_name}",
-                        "percent": min(file_percent, 99),
-                        "current": i + 1,
-                        "total": total_files,
-                    })
-                    try:
-                        backend.process_each_file(
-                            file, instrument_name, project_id, orcid,
-                            session_name, session_id, sample_unique_id,
-                            kw_list, comments)
-                    except Exception as e:
-                        yield _sse("error", {"error": f"Failed on {file_name}: {e}"})
-                        return
+                # Step 3: Identify session files
+                yield _sse("progress", {"step": "identify", "message": "Identifying session files...", "percent": 15})
+                session_files = backend.identify_session_files(session_folder_path)
+                total_files = len(session_files)
 
-            yield _sse("complete", {"session_dsid": session_id, "project_id": project_id})
+                # Step 4: Create session dataset
+                yield _sse("progress", {"step": "session", "message": "Creating session in Crucible...", "percent": 20})
+                try:
+                    session_name, session_id = backend.create_session(
+                        session_folder_path, kw_list, comments,
+                        orcid, project_id, instrument_name, sample_unique_id)
+                    backend.logger.info(f"Created session '{session_name}' with ID {session_id}")
+                except Exception as e:
+                    backend.logger.error(e)
+                    yield _sse("error", {"error": f"Failed to create session: {e}"})
+                    return
+
+                # Step 5: Process each file
+                if total_files == 0:
+                    yield _sse("progress", {"step": "done", "message": "No data files found, session created.", "percent": 100})
+                else:
+                    for i, file in enumerate(session_files):
+                        file_name = Path(file).name
+                        base_percent = 25
+                        file_percent = base_percent + int((i + 1) / total_files * 75)
+                        yield _sse("progress", {
+                            "step": "file",
+                            "message": f"Processing file {i + 1}/{total_files}: {file_name}",
+                            "percent": min(file_percent, 99),
+                            "current": i + 1,
+                            "total": total_files,
+                        })
+                        try:
+                            new_dsid = backend.upload_dataset(
+                                file, instrument_name, project_id, orcid,
+                                session_name, session_id, sample_unique_id,
+                                kw_list, comments)
+                            backend.logger.info(f"Uploaded file '{file_name}' as dataset ID {new_dsid}")
+                        except Exception as e:
+                            backend.logger.error(e)
+                            yield _sse("error", {"error": f"Failed on {file_name}: {e}"})
+                            return
+
+                yield _sse("complete", {"session_dsid": session_id, "project_id": project_id})
 
         except Exception as e:
+            backend.logger.error(e)
             yield _sse("error", {"error": str(e)})
 
     return Response(generate(), mimetype="text/event-stream",

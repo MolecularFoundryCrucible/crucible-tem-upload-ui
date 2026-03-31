@@ -126,7 +126,15 @@ def lookup_sample(sample_name: str | None = None, sample_unique_id: str | None =
 
 
 def print_sample_barcode(sample_unique_id, sample_name):
-    pass
+    from image_print import make_qr, make_nirvana_image, print_label
+    # qr code
+    qr_img = make_qr(sample_unique_id)
+
+    # label image
+    make_nirvana_image(qr_img, [sample_name, sample_unique_id[0:13]], "batch.png")
+    print_label("Brother PT-D610BT", "batch.png")
+    return
+
 
 
 def get_emi_file_name(serfile: str) -> str:
@@ -204,9 +212,9 @@ def copy_dataset_to_cloud(file: str, instrument_name: str, storage_bucket: str =
     return cloud_files
 
 
-def process_each_file(file: str, instrument_name: str, project_id: str, orcid: str,
-                      session_name: str, session_dsid: str, sample_unique_id: str,
-                      kw_list: list[str], comments: str) -> str:
+def upload_dataset(file: str, instrument_name: str, project_id: str, orcid: str,
+                      session_name: str=None, session_dsid: str = None, sample_unique_id: str=None,
+                      kw_list: list[str] = [], comments: str = None) -> str:
     # copy the files to temp bucket
     cloud_files = copy_dataset_to_cloud(file, instrument_name)
 
@@ -222,65 +230,68 @@ def process_each_file(file: str, instrument_name: str, project_id: str, orcid: s
 
     new_ds_dsid = new_ds['created_record']['unique_id']
     client.datasets.request_ingestion(new_ds_dsid, ingestion_class=None)
-    client.datasets.link_parent_child(parent_dataset_id=session_dsid, child_dataset_id=new_ds_dsid)
-    client.samples.add_to_dataset(dataset_id = new_ds_dsid, sample_id = sample_unique_id)
+
+    if session_dsid is not None:
+        client.datasets.link_parent_child(parent_dataset_id=session_dsid, child_dataset_id=new_ds_dsid)
+    if sample_unique_id is not None:
+        client.samples.add_to_dataset(dataset_id = new_ds_dsid, sample_id = sample_unique_id)
 
     return new_ds_dsid
 
 
-def upload(
-    orcid: str,
-    project_id: str,
-    instrument_name: str,
-    sample_unique_id: str,
-    session_folder_path: str,
-    kw_list: list[str] = [],
-    comments: str = '',
-) -> bool:
-    """
-    Run the upload with the collected form data.
+# def upload_session(
+#     orcid: str,
+#     project_id: str,
+#     instrument_name: str,
+#     sample_unique_id: str,
+#     session_folder_path: str,
+#     kw_list: list[str] = [],
+#     comments: str = '',
+# ) -> bool:
+#     """
+#     Run the upload with the collected form data.
 
-    Returns True on success, False on failure.
-    """
-    # Guard against uploading from high-level directories (e.g. "/" or "D:\")
-    MIN_DEPTH = 3  # require at least 3 levels below root
-    parts = Path(session_folder_path).resolve().parts
-    if len(parts) - 1 < MIN_DEPTH:
-        raise ValueError(
-            f"Session folder '{session_folder_path}' is too close to the filesystem root. "
-            f"Please select a more specific folder (at least {MIN_DEPTH} levels deep)."
-        )
+#     Returns True on success, False on failure.
+#     """
+#     # Guard against uploading from high-level directories (e.g. "/" or "D:\")
+#     MIN_DEPTH = 3  # require at least 3 levels below root
+#     parts = Path(session_folder_path).resolve().parts
+#     if len(parts) - 1 < MIN_DEPTH:
+#         raise ValueError(
+#             f"Session folder '{session_folder_path}' is too close to the filesystem root. "
+#             f"Please select a more specific folder (at least {MIN_DEPTH} levels deep)."
+#         )
 
-    # Copy the files to google drive
-    try:
-        copy_all_files_to_gdrive(session_folder_path, instrument_name)
-    except Exception as e:
-        logger.error(e)
+#     # Copy the files to google drive
+#     try:
+#         copy_all_files_to_gdrive(session_folder_path, instrument_name)
+#     except Exception as e:
+#         logger.error(e)
 
-    # Identify session_files for Crucible
-    session_files = identify_session_files(session_folder_path)
+#     # Identify session_files for Crucible
+#     session_files = identify_session_files(session_folder_path)
 
-    # Create a session dataset in Crucible
-    try:
-        session_name, session_id = create_session(session_folder_path,
-                                                   kw_list,
-                                                   comments,
-                                                   orcid,
-                                                   project_id,
-                                                   instrument_name,
-                                                   sample_unique_id)
-    except Exception as e:
-        logger.error(e)
-        return
+#     # Create a session dataset in Crucible
+#     try:
+#         session_name, session_id = create_session(session_folder_path,
+#                                                    kw_list,
+#                                                    comments,
+#                                                    orcid,
+#                                                    project_id,
+#                                                    instrument_name,
+#                                                    sample_unique_id)
+#     except Exception as e:
+#         logger.error(e)
+#         return
     
-    # process each file as dataset
-    for file in session_files:
-        try:
-            process_each_file(file, instrument_name, project_id, orcid,
-                              session_name, session_id, sample_unique_id, kw_list, comments)
-        except Exception as e:
-            msg = f'Crucible upload failed for {file} with error {e}'
-            logger.error(msg)
-            raise Exception(msg)
+#     # process each file as dataset
+#     for file in session_files:
+#         try:
+#             process_each_file(file, instrument_name, project_id, orcid,
+#                               session_name, session_id, sample_unique_id, kw_list, comments)
+#         except Exception as e:
+#             msg = f'Crucible upload failed for {file} with error {e}'
+#             logger.error(msg)
+#             raise Exception(msg)
 
-    return session_id
+#     return session_id
