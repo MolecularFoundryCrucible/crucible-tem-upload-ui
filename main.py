@@ -14,13 +14,12 @@ from flask import Flask, Response, jsonify, render_template, request
 import json
 
 import backend
-from instrument_conf import DEFAULT_BROWSE_DIR, IS_SESSION, DEFAULT_INSTRUMENT_NAME, PRINT_BARCODE_ENABLED
+from instrument_conf import DEFAULT_BROWSE_DIR, IS_SESSION, DEFAULT_INSTRUMENT_NAME, PRINT_BARCODE_ENABLED, INSTRUMENTS
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(funcName)s: %(message)s")
 
 app = Flask(__name__)
 
-INSTRUMENTS = ["titanx", "themis", "team1",  "team05", "insitu_pl"] # you can add your instrument here
 # Tkinter must run on the main thread. Flask runs in a background thread.
 # We use two queues to hand off dialog requests/results between threads.
 _tk_root = tk.Tk()

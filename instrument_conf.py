@@ -1,8 +1,8 @@
 DEFAULT_BROWSE_DIR = "Z:\crucible-data"  # Set to a path like "/data/sessions" to default the file picker
-DEFAULT_INSTRUMENT_NAME = 'titanx'
 IS_SESSION = True # Set to False if the instrument doesn't have sessions, and files are uploaded directly as datasets
-
-
+INSTRUMENTS=["titanx", "themis", "team1",  "team05", 'spectre', "insitu_pl"] # you can add your instrument here
+DEFAULT_INSTRUMENT_NAME = 'titanx'
+PRINT_BARCODE_ENABLED = True 
 '''
 To enable barcode printing: 
 - set PRINT_BARCODE_ENABLED to True
@@ -13,4 +13,4 @@ To enable barcode printing:
 - Download the brothers SDK for Windows B-pac (made a free account)
 - Set printer settings through windows to match the tape type and size that you want to print (https://docs.google.com/presentation/d/1vSS1Xp0fzIwflpj50vx5LOO9MuW7FtZhLS1EQ7D4opI/edit?usp=sharing)
 '''
-PRINT_BARCODE_ENABLED = True 
+
