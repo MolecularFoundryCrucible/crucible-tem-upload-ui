@@ -117,6 +117,30 @@ def print_barcode():
     return jsonify({"ok": True})
 
 
+@app.post("/api/comments/parse")
+def parse_comments():
+    data = request.json or {}
+    comments = data.get("comments", "").strip()
+    if not comments:
+        return jsonify({"warning": "No comments provided", "raw_comments": ""}), 200
+    try:
+        result = backend.claude_comment_parser(comments)
+        # Extract text from Anthropic response (list of ContentBlock objects)
+        text = result[0].text if result else ""
+        # Try to parse JSON from the response text
+        # Claude may wrap JSON in markdown code fences
+        import re
+        json_match = re.search(r'```(?:json)?\s*([\s\S]*?)```', text)
+        if json_match:
+            parsed = json.loads(json_match.group(1).strip())
+        else:
+            parsed = json.loads(text.strip())
+        return jsonify({"parsed": parsed})
+    except Exception as e:
+        logging.error(f"Failed to parse comments: {e}")
+        return jsonify({"error": f"Failed to parse comments: {e}"}), 500
+
+
 @app.post("/api/upload")
 def do_upload():
     data = request.json or {}
@@ -131,6 +155,7 @@ def do_upload():
     sample_unique_id = data.get("sample_unique_id", None)  
     session_folder_path = data["session_folder_path"].strip()
     comments = data.get("comments", "").strip()
+    scientific_metadata = data.get("scientific_metadata", None)
     kw_list = []
 
     def _sse(event, payload):
@@ -163,8 +188,9 @@ def do_upload():
                 try:
                     new_dsid = backend.upload_dataset(
                         session_folder_path, instrument_name, project_id, orcid,
-                        session_name = None, session_dsid = None, sample_unique_id = sample_unique_id, 
-                        kw_list = kw_list, comments = comments)
+                        session_name = None, session_dsid = None, sample_unique_id = sample_unique_id,
+                        kw_list = kw_list, comments = comments,
+                        scientific_metadata = scientific_metadata)
                     
                     yield _sse("complete", {"session_dsid": new_dsid, "project_id": project_id})
 
@@ -184,7 +210,8 @@ def do_upload():
                 try:
                     session_name, session_id = backend.create_session(
                         session_folder_path, kw_list, comments,
-                        orcid, project_id, instrument_name, sample_unique_id)
+                        orcid, project_id, instrument_name, sample_unique_id,
+                        scientific_metadata)
                     backend.logger.info(f"Created session '{session_name}' with ID {session_id}")
                 except Exception as e:
                     backend.logger.error(e)
@@ -210,7 +237,8 @@ def do_upload():
                             new_dsid = backend.upload_dataset(
                                 file, instrument_name, project_id, orcid,
                                 session_name, session_id, sample_unique_id,
-                                kw_list, comments)
+                                kw_list, comments,
+                                scientific_metadata)
                             backend.logger.info(f"Uploaded file '{file_name}' as dataset ID {new_dsid}")
                         except Exception as e:
                             backend.logger.error(e)

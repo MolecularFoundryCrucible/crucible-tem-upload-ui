@@ -197,6 +197,40 @@
     </div>
   </div>
 
+  <!-- Annotation Review Modal -->
+  <div class="modal fade" id="annotation-modal" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+      <div class="modal-content">
+        <div class="modal-header bg-info text-white">
+          <h5 class="modal-title">Review Parsed Metadata</h5>
+        </div>
+        <div class="modal-body">
+          <p class="text-muted mb-3">
+            The following key-value pairs were extracted from your comments.
+            Select which ones to include as scientific metadata.
+          </p>
+          <table class="table table-sm table-hover" id="annotation-table">
+            <thead>
+              <tr>
+                <th style="width:2.5rem;">
+                  <input type="checkbox" class="form-check-input" id="annotation-check-all" checked />
+                </th>
+                <th>Key</th>
+                <th>Value</th>
+              </tr>
+            </thead>
+            <tbody id="annotation-tbody"></tbody>
+          </table>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" id="annotation-skip">Skip</button>
+          <button type="button" class="btn btn-outline-primary" id="annotation-include-selected">Include Selected</button>
+          <button type="button" class="btn btn-primary" id="annotation-include-all">Include All</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
   <script>
     // -------------------------------------------------------------------------
@@ -386,6 +420,72 @@
     }
 
     // -------------------------------------------------------------------------
+    // Annotation review
+    // -------------------------------------------------------------------------
+    let annotationModal = null;
+
+    function showAnnotationModal(parsed) {
+      return new Promise((resolve) => {
+        if (!annotationModal) {
+          annotationModal = new bootstrap.Modal(document.getElementById("annotation-modal"));
+        }
+
+        const tbody = document.getElementById("annotation-tbody");
+        tbody.innerHTML = "";
+        const entries = Object.entries(parsed);
+
+        entries.forEach(([key, value], i) => {
+          const tr = document.createElement("tr");
+          tr.innerHTML =
+            `<td><input type="checkbox" class="form-check-input annotation-check" data-key="${key}" checked /></td>` +
+            `<td class="fw-semibold">${escapeHtml(key)}</td>` +
+            `<td>${escapeHtml(String(value))}</td>`;
+          tbody.appendChild(tr);
+        });
+
+        document.getElementById("annotation-check-all").checked = true;
+
+        // Wire up "check all" toggle
+        const checkAll = document.getElementById("annotation-check-all");
+        checkAll.onchange = () => {
+          document.querySelectorAll(".annotation-check").forEach(cb => cb.checked = checkAll.checked);
+        };
+
+        function cleanup() {
+          document.getElementById("annotation-skip").onclick = null;
+          document.getElementById("annotation-include-selected").onclick = null;
+          document.getElementById("annotation-include-all").onclick = null;
+          annotationModal.hide();
+        }
+
+        document.getElementById("annotation-skip").onclick = () => { cleanup(); resolve(null); };
+
+        document.getElementById("annotation-include-all").onclick = () => {
+          cleanup();
+          resolve(parsed);
+        };
+
+        document.getElementById("annotation-include-selected").onclick = () => {
+          const selected = {};
+          document.querySelectorAll(".annotation-check:checked").forEach(cb => {
+            const key = cb.dataset.key;
+            selected[key] = parsed[key];
+          });
+          cleanup();
+          resolve(Object.keys(selected).length > 0 ? selected : null);
+        };
+
+        annotationModal.show();
+      });
+    }
+
+    function escapeHtml(str) {
+      const div = document.createElement("div");
+      div.textContent = str;
+      return div.innerHTML;
+    }
+
+    // -------------------------------------------------------------------------
     // Upload
     // -------------------------------------------------------------------------
     let uploadModal = null;
@@ -433,6 +533,44 @@
       setSpinner("upload", true);
       document.getElementById("btn-upload").disabled = true;
       clearStatus();
+
+      const comments = document.getElementById("comments").value.trim();
+      let scientific_metadata = null;
+
+      // If comments exist, try to parse them with Claude
+      if (comments) {
+        try {
+          setSpinner("upload", true);
+          showStatus("Parsing comments...", "info");
+          const parseRes = await fetch("/api/comments/parse", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ comments }),
+          });
+          const parseData = await parseRes.json();
+          clearStatus();
+
+          if (!parseRes.ok) {
+            showStatus("Failed to parse comments: " + (parseData.error || "Unknown error"), "danger");
+            setSpinner("upload", false);
+            return;
+          }
+
+          if (parseData.parsed) {
+            // Show the annotation modal and wait for user decision
+            scientific_metadata = await showAnnotationModal(parseData.parsed);
+            if (scientific_metadata) {
+              // Include comments in the metadata
+              scientific_metadata.comments = comments;
+            }
+          }
+        } catch (e) {
+          showStatus("Comment parsing failed: " + e.message, "danger");
+          setSpinner("upload", false);
+          return;
+        }
+      }
+
       resetUploadModal();
 
       // Show the modal
@@ -453,7 +591,8 @@
             instrument_name,
             session_folder_path,
             sample_unique_id: document.getElementById("sample-uid").value.trim() || null,
-            comments: document.getElementById("comments").value.trim(),
+            comments,
+            scientific_metadata,
           }),
         });
 

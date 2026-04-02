@@ -5,6 +5,7 @@ Replace these stubs with your real implementations.
 import re
 from pathlib import Path
 import subprocess as sp
+from urllib import response
 from crucible import CrucibleClient
 from crucible.models import BaseDataset
 import logging
@@ -144,7 +145,8 @@ def get_emi_file_name(serfile: str) -> str:
 
 
 def create_session(session_folder_path: str, kw_list: list[str], comments: str, orcid: str,
-                   project_id: str, instrument_name: str, sample_unique_id: str | None = None) -> tuple[str, str]:
+                   project_id: str, instrument_name: str, sample_unique_id: str | None = None,
+                   scientific_metadata: dict = None) -> tuple[str, str]:
     project_id = project_id.replace('Internal Research (', '').replace(')', '').strip()
     session_name = Path(session_folder_path).name
     session_ds = BaseDataset(dataset_name=f'{instrument_name} session: {session_name}',
@@ -154,8 +156,9 @@ def create_session(session_folder_path: str, kw_list: list[str], comments: str, 
                              measurement=f'full {instrument_name} session',
                              session_name=session_name)
 
+    scimd = scientific_metadata if scientific_metadata else {'comments': comments}
     new_sess_ds = client.datasets.create(session_ds,
-                                         scientific_metadata={'comments': comments},
+                                         scientific_metadata=scimd,
                                          keywords=kw_list)
 
     sess_dsid = new_sess_ds['created_record']['unique_id']
@@ -214,7 +217,8 @@ def copy_dataset_to_cloud(file: str, instrument_name: str, storage_bucket: str =
 
 def upload_dataset(file: str, instrument_name: str, project_id: str, orcid: str,
                       session_name: str=None, session_dsid: str = None, sample_unique_id: str=None,
-                      kw_list: list[str] = [], comments: str = None) -> str:
+                      kw_list: list[str] = [], comments: str = None,
+                      scientific_metadata: dict = None) -> str:
     # copy the files to temp bucket
     cloud_files = copy_dataset_to_cloud(file, instrument_name)
 
@@ -225,7 +229,7 @@ def upload_dataset(file: str, instrument_name: str, project_id: str, orcid: str,
                      instrument_name=instrument_name,
                      session_name=session_name)
 
-    scimd = {'comments': comments}  # TODO: ADD CLAUDE API CALL
+    scimd = scientific_metadata if scientific_metadata else {'comments': comments}
     new_ds = client.datasets.create(ds, scientific_metadata=scimd, keywords=kw_list)
 
     new_ds_dsid = new_ds['created_record']['unique_id']
@@ -238,60 +242,35 @@ def upload_dataset(file: str, instrument_name: str, project_id: str, orcid: str,
 
     return new_ds_dsid
 
+def claude_comment_parser(comments: str) -> dict:
+    """
+    Parse the comments string for structured metadata.
+    For example, you could look for lines like "Key: Value" and extract them into a dict.
+    """
+    import os
+    import openai
+    from dotenv import load_dotenv
+    load_dotenv()  # take environment variables from .env.
+    cborg_url = "https://api.cborg.ai/v1"
+    cborg_api_key = os.environ.get('CBORG_API_KEY')  # replace with your actual API key
+    print(f'{cborg_api_key=}')
+    # comments = 'test data from selin, gold nanoparticles, aluminum shell, 40K'
+    prompt_template = ['hi! can you please parse these comments into a dictionary of key value pairs? \
+                    If there is information in the comments that does not fit into a key value pair, \
+                    please ignore it. Please return only the dictionary as json. Here are the comments:', comments]
 
-# def upload_session(
-#     orcid: str,
-#     project_id: str,
-#     instrument_name: str,
-#     sample_unique_id: str,
-#     session_folder_path: str,
-#     kw_list: list[str] = [],
-#     comments: str = '',
-# ) -> bool:
-#     """
-#     Run the upload with the collected form data.
+    client = openai.OpenAI(api_key=cborg_api_key, base_url=cborg_url)
+    print(f'{client=}')
+    response = client.chat.completions.create(
+            model="claude-opus-4-6",
+            messages = [
+                {
+                    "role": "user",
+                    "content": ' '.join(prompt_template)
+                }
+            ],
+            temperature=0.0   # Optional: set model temperature to control amount of variance in response
+        )
+    print(f'{response=}')
+    return response.choices[-1].message.content
 
-#     Returns True on success, False on failure.
-#     """
-#     # Guard against uploading from high-level directories (e.g. "/" or "D:\")
-#     MIN_DEPTH = 3  # require at least 3 levels below root
-#     parts = Path(session_folder_path).resolve().parts
-#     if len(parts) - 1 < MIN_DEPTH:
-#         raise ValueError(
-#             f"Session folder '{session_folder_path}' is too close to the filesystem root. "
-#             f"Please select a more specific folder (at least {MIN_DEPTH} levels deep)."
-#         )
-
-#     # Copy the files to google drive
-#     try:
-#         copy_all_files_to_gdrive(session_folder_path, instrument_name)
-#     except Exception as e:
-#         logger.error(e)
-
-#     # Identify session_files for Crucible
-#     session_files = identify_session_files(session_folder_path)
-
-#     # Create a session dataset in Crucible
-#     try:
-#         session_name, session_id = create_session(session_folder_path,
-#                                                    kw_list,
-#                                                    comments,
-#                                                    orcid,
-#                                                    project_id,
-#                                                    instrument_name,
-#                                                    sample_unique_id)
-#     except Exception as e:
-#         logger.error(e)
-#         return
-    
-#     # process each file as dataset
-#     for file in session_files:
-#         try:
-#             process_each_file(file, instrument_name, project_id, orcid,
-#                               session_name, session_id, sample_unique_id, kw_list, comments)
-#         except Exception as e:
-#             msg = f'Crucible upload failed for {file} with error {e}'
-#             logger.error(msg)
-#             raise Exception(msg)
-
-#     return session_id

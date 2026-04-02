@@ -5,8 +5,10 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "anthropic>=0.88.0",
     "flask>=3.0",
     "nano-crucible>=2.0.2",
+    "openai>=2.30.0",
     "pillow>=12.1.1",
     "python-dotenv>=1.2.2",
     "qrcode>=8.2",
