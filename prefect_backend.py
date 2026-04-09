@@ -177,11 +177,11 @@ def create_session(session_folder_path: str, kw_list: list[str], comments: str, 
 
 @task
 def identify_session_files(session_folder_path: str) -> list[str]:
-    # TODO: use Path.rglob for recursive discovery
     acceptable_suffixes = {'.emd', '.dm3', '.dm4', '.bcf', '.ser', '.mcr', '.h5'}
     max_size = 20 * 1024 ** 3  # 2 GiB
+    session_path = Path(session_folder_path)
     return [
-        str(f) for f in Path(session_folder_path).iterdir()
+        str(f) for f in session_path.rglob('*')
         if f.is_file()
         and f.suffix.lower() in acceptable_suffixes
         and f.stat().st_size < max_size
@@ -348,6 +348,7 @@ def tem_session_upload(file: str, instrument_name: str, project_id: str, orcid: 
     # Submit all child flows in parallel (timeout=0 returns immediately)
     child_runs = []
     for f in session_files:
+        time.sleep(0.3)
         run = run_deployment(
             "upload-child-dataset/upload-child-dataset",
             parameters={
