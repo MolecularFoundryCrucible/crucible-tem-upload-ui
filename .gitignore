@@ -17,5 +17,10 @@ test-data/*
 .env
 .flow_results
 
-# mac os
+# other
 .DS_Store
+mf-crucible-*.json
+rclone/**
+*.code-workspace
+*.txy
+*instrument_conf.py

@@ -103,6 +103,28 @@ def sample_lookup():
     return jsonify(result)
 
 
+@app.post("/api/sample/create")
+def sample_create():
+    data = request.json or {}
+    sample_name = (data.get("sample_name") or "").strip()
+    owner_orcid = (data.get("owner_orcid") or "").strip()
+    project_id = (data.get("project_id") or "").strip()
+    if not sample_name or not owner_orcid or not project_id:
+        return jsonify({"error": "sample_name, owner_orcid, and project_id are required"}), 400
+    try:
+        result = backend.create_sample(
+            sample_name=sample_name,
+            owner_orcid=owner_orcid,
+            project_id=project_id,
+            description=data.get("description") or None,
+            sample_type=data.get("sample_type") or None,
+        )
+    except Exception as e:
+        backend.logger.error(e)
+        return jsonify({"error": str(e)}), 500
+    return jsonify(result)
+
+
 @app.post("/api/sample/print-barcode")
 def print_barcode():
     data = request.json or {}
@@ -117,6 +139,26 @@ def print_barcode():
     return jsonify({"ok": True})
 
 
+@app.post("/api/session/check")
+def session_check():
+    data = request.json or {}
+    required = ["orcid", "project_id", "instrument_name", "session_folder_path"]
+    missing = [f for f in required if not (data.get(f) or "").strip()]
+    if missing:
+        return jsonify({"error": f"Missing fields: {', '.join(missing)}"}), 400
+    try:
+        sessions = backend.check_existing_sessions(
+            session_folder_path=data["session_folder_path"].strip(),
+            orcid=data["orcid"].strip(),
+            project_id=data["project_id"].strip(),
+            instrument_name=data["instrument_name"].strip(),
+        )
+    except Exception as e:
+        backend.logger.error(e)
+        return jsonify({"error": str(e)}), 500
+    return jsonify({"sessions": sessions})
+
+
 @app.post("/api/upload")
 def do_upload():
     data = request.json or {}
@@ -129,6 +171,7 @@ def do_upload():
     project_id = data["project_id"].strip()
     instrument_name = data["instrument_name"].strip()
     sample_unique_id = data.get("sample_unique_id", None)
+    session_dsid = data.get("session_dsid", None)
     session_folder_path = data["session_folder_path"].strip()
     comments = data.get("comments", "").strip()
     kw_list = []
@@ -148,6 +191,7 @@ def do_upload():
                 "project_id": project_id,
                 "orcid": orcid,
                 "sample_unique_id": sample_unique_id,
+                "session_dsid": session_dsid,
                 "kw_list": kw_list,
                 "comments": comments,
             },

@@ -10,8 +10,15 @@ from crucible.models import BaseDataset
 import logging
 import asyncio
 from prefect import flow, task
+from prefect.cache_policies import INPUTS
 
 logger = logging.getLogger(__name__)
+
+
+class MultipleSessionsFound(Exception):
+    def __init__(self, sessions: list[dict]):
+        self.sessions = sessions
+        super().__init__(f"Multiple sessions found: {len(sessions)}")
 
 
 try:
@@ -75,7 +82,6 @@ def lookup_user_by_email(email: str) -> dict:
 
     user_name = f"{user_info['first_name']} {user_info['last_name']}"
     logger.info(f"User name for email '{email}' is: {user_name}")
-    # TODO: internal research formatting
     projects = client.list_projects(user_info['orcid'])
     project_ids = [x['project_id'] for x in projects]
     project_ids.sort()
@@ -129,6 +135,28 @@ def lookup_sample(sample_name: str | None = None, sample_unique_id: str | None =
         return {}
 
 
+def create_sample(sample_name: str, owner_orcid: str, project_id: str,
+                   unique_id: str | None = None, description: str | None = None,
+                   timestamp: str | None = None, sample_type: str | None = None) -> dict:
+    kwargs = {k: v for k, v in {
+        "unique_id": unique_id,
+        "sample_name": sample_name,
+        "description": description,
+        "timestamp": timestamp,
+        "project_id": project_id,
+        "sample_type": sample_type,
+        "owner_orcid": owner_orcid,
+    }.items() if v is not None}
+
+    result = client.samples.create(**kwargs)
+    logger.info(f"Created sample: {result}")
+    created = result.get('created_record', result)
+    return {
+        'unique_id': created.get('unique_id', ''),
+        'sample_name': created.get('sample_name', sample_name),
+    }
+
+
 def print_sample_barcode(sample_unique_id, sample_name):
     from image_print import make_qr, make_nirvana_image, print_label
     # qr code
@@ -153,36 +181,58 @@ def check_session_depth(session_folder_path: str, min_depth: int = 3) -> None:
         return
 
 
-@task
-def create_session(session_folder_path: str, kw_list: list[str], comments: str, orcid: str,
-                   project_id: str, instrument_name: str, sample_unique_id: str | None = None) -> tuple[str, str]:
+def check_existing_sessions(session_folder_path: str, orcid: str, project_id: str,
+                            instrument_name: str) -> list[dict]:
     project_id = project_id.replace('Internal Research (', '').replace(')', '').strip()
     session_name = Path(session_folder_path).name
-    session_ds = BaseDataset(dataset_name=f'{instrument_name} session: {session_name}',
-                             owner_orcid=orcid,
-                             project_id=project_id,
-                             instrument_name=instrument_name,
-                             measurement=f'full {instrument_name} session',
-                             session_name=session_name)
+    dsname = f'{instrument_name} session: {session_name}'
+    existing = client.datasets.list(owner_orcid=orcid, project_id=project_id, dataset_name=dsname)
+    return [
+        {
+            'unique_id': ds.get('unique_id', ''),
+            'dataset_name': ds.get('dataset_name', ''),
+            'creation_time': ds.get('creation_time', ''),
+            'modification_time': ds.get('modification_time', ''),
+        }
+        for ds in existing
+    ]
 
-    new_sess_ds = client.datasets.create(session_ds,
-                                         scientific_metadata={'comments': comments},
-                                         keywords=kw_list)
 
-    sess_dsid = new_sess_ds['created_record']['unique_id']
+@task
+def create_session(session_folder_path: str, kw_list: list[str], comments: str, orcid: str,
+                   project_id: str, instrument_name: str, sample_unique_id: str | None = None,
+                   session_dsid: str | None = None) -> tuple[str, str]:
+    project_id = project_id.replace('Internal Research (', '').replace(')', '').strip()
+    session_name = Path(session_folder_path).name
+    dsname = f'{instrument_name} session: {session_name}'
+
+    if session_dsid is not None and session_dsid != "new":
+        use_session_dsid = session_dsid
+    else:
+        session_ds = BaseDataset(dataset_name=dsname,
+                                owner_orcid=orcid,
+                                project_id=project_id,
+                                instrument_name=instrument_name,
+                                measurement=f'full {instrument_name} session',
+                                session_name=session_name)
+
+        new_sess_ds = client.datasets.create(session_ds,
+                                            scientific_metadata={'comments': comments},
+                                            keywords=kw_list)
+
+        use_session_dsid = new_sess_ds['created_record']['unique_id']
+
     if sample_unique_id is not None:
         client.samples.add_to_dataset(sample_id=sample_unique_id,
-                                      dataset_id=sess_dsid)
-    return session_name, sess_dsid
+                                      dataset_id=use_session_dsid)
+    return session_name, use_session_dsid
 
 @task
 def identify_session_files(session_folder_path: str) -> list[str]:
     acceptable_suffixes = {'.emd', '.dm3', '.dm4', '.bcf', '.ser', '.mcr', '.h5'}
-    max_size = 20 * 1024 ** 3  # 2 GiB
-    session_path = Path(session_folder_path)
+    max_size = 2 * 1024 ** 3  # 2 GiB
     return [
-        str(f) for f in session_path.rglob('*')
-        if f.is_file()
+        str(f) for f in Path(session_folder_path).rglob("*") if f.is_file()
         and f.suffix.lower() in acceptable_suffixes
         and f.stat().st_size < max_size
     ]
@@ -226,8 +276,20 @@ def copy_dataset_to_cloud(file: str, instrument_name: str, storage_bucket: str =
 
 
 @task
-def create_sql_record_for_dataset(cloud_files: list[str], instrument_name: str | None = None, project_id: str | None = None, orcid: str | None = None, session_name: str | None = None, kw_list: list[str] = [], comments: str | None = None):
-# create the dataset
+def create_sql_record_for_dataset(cloud_files: list[str], 
+                                  instrument_name: str | None = None,
+                                  project_id: str | None = None,
+                                  orcid: str | None = None,
+                                  session_name: str | None = None,
+                                  kw_list: list[str] = [],
+                                  comments: str | None = None):
+    
+    existing = client.datasets.list(file_to_upload = cloud_files[0], owner_orcid = orcid, project_id = project_id, session_name = session_name)
+    if len(existing) > 0:
+        existing.sort(key=lambda ds: ds.get('modification_time', ''), reverse=True)
+        return existing[0]['unique_id']
+    
+    # create the dataset
     ds_kwargs = {k: v for k, v in dict(
         file_to_upload=cloud_files[0],
         owner_orcid=orcid,
@@ -292,7 +354,7 @@ def _run_name(prefix):
 
 
 @flow(flow_run_name=_run_name("insitu-upload"), persist_result=True)
-def insitu_upload(file: str, instrument_name: str, project_id: str, orcid: str, sample_unique_id: str | None = None, kw_list: list[str] = [], comments: str | None = None) -> str:
+def insitu_upload(file: str, instrument_name: str, project_id: str, orcid: str, sample_unique_id: str | None = None, session_dsid: str | None = None, kw_list: list[str] = [], comments: str | None = None) -> str:
     # copy the files to temp bucket
     cloud_files = copy_dataset_to_cloud(file, instrument_name)
 
@@ -328,7 +390,7 @@ def upload_child_dataset(file: str, instrument_name: str, project_id: str, orcid
 
 @flow(flow_run_name=_run_name("tem-session"), persist_result=True)
 def tem_session_upload(file: str, instrument_name: str, project_id: str, orcid: str,
-                       sample_unique_id: str | None = None,
+                       sample_unique_id: str | None = None, session_dsid: str | None = None,
                        kw_list: list[str] = [], comments: str | None = None) -> str:
     import time
     from prefect.deployments import run_deployment
@@ -341,7 +403,8 @@ def tem_session_upload(file: str, instrument_name: str, project_id: str, orcid: 
 
     session_name, session_dsid = create_session(
         session_folder_path, kw_list, comments or "",
-        orcid, project_id, instrument_name, sample_unique_id)
+        orcid, project_id, instrument_name, sample_unique_id,
+        session_dsid=session_dsid)
 
     session_files = identify_session_files(session_folder_path)
 

@@ -201,6 +201,61 @@
     </div>
   </div>
 
+  <!-- Select Session Modal -->
+  <div class="modal fade" id="select-session-modal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title">Select Existing Session</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <p class="text-muted small">Multiple sessions match this folder. Select which one to use, or create a new session.</p>
+          <div id="session-list" class="list-group mb-3"></div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="button" class="btn btn-outline-primary" onclick="confirmSessionSelection(null)">Create New Session</button>
+          <button type="button" class="btn btn-primary" onclick="confirmSessionSelection()" id="btn-use-session">Use Selected</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Create Sample Modal -->
+  <div class="modal fade" id="create-sample-modal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title">Create New Sample</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <p class="text-muted small">No sample was found. Fill in the details below to create a new one.</p>
+          <div class="mb-3">
+            <label class="form-label fw-semibold">Sample Name <span class="text-danger">*</span></label>
+            <input id="create-sample-name" type="text" class="form-control" />
+          </div>
+          <div class="mb-3">
+            <label class="form-label fw-semibold">Sample Type</label>
+            <input id="create-sample-type" type="text" class="form-control" />
+          </div>
+          <div class="mb-3">
+            <label class="form-label fw-semibold">Description</label>
+            <textarea id="create-sample-description" class="form-control" rows="2"></textarea>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="button" class="btn btn-primary" onclick="submitCreateSample()">
+            <span id="spinner-create-sample" class="spinner-border spinner-border-sm d-none me-1" role="status"></span>
+            Create Sample
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
   <script>
     // -------------------------------------------------------------------------
@@ -312,10 +367,14 @@
         });
         const data = await res.json();
         if (!res.ok) {
-          alert("Sample not found");
-          document.getElementById("sample-name").value = "";
           document.getElementById("sample-uid").value = "";
           document.getElementById("description").value = "";
+          const searchedName = payload.sample_name || "";
+          document.getElementById("create-sample-name").value = searchedName;
+          document.getElementById("create-sample-type").value = "";
+          document.getElementById("create-sample-description").value = "";
+          const modal = new bootstrap.Modal(document.getElementById("create-sample-modal"));
+          modal.show();
           return;
         }
 
@@ -349,6 +408,45 @@
         if (!n && !u) document.getElementById("description").value = "";
       });
     });
+
+    // -------------------------------------------------------------------------
+    // Create Sample
+    // -------------------------------------------------------------------------
+    async function submitCreateSample() {
+      const sampleName = document.getElementById("create-sample-name").value.trim();
+      if (!sampleName) { showStatus("Sample name is required.", "warning"); return; }
+
+      const project = document.getElementById("project").value;
+      if (!project || !state.orcid) { showStatus("User and project must be selected first.", "warning"); return; }
+
+      document.getElementById("spinner-create-sample").classList.remove("d-none");
+
+      try {
+        const res = await fetch("/api/sample/create", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sample_name: sampleName,
+            sample_type: document.getElementById("create-sample-type").value.trim() || null,
+            description: document.getElementById("create-sample-description").value.trim() || null,
+            project_id: project,
+            owner_orcid: state.orcid,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) { showStatus(data.error || "Failed to create sample", "danger"); return; }
+
+        document.getElementById("sample-name").value = data.sample_name || "";
+        document.getElementById("sample-uid").value = data.unique_id || "";
+        document.getElementById("description").value = "";
+        bootstrap.Modal.getInstance(document.getElementById("create-sample-modal")).hide();
+        showStatus("Sample created successfully.", "success");
+      } catch (e) {
+        showStatus("Create sample failed: " + e.message, "danger");
+      } finally {
+        document.getElementById("spinner-create-sample").classList.add("d-none");
+      }
+    }
 
     // -------------------------------------------------------------------------
     // Print Sample Barcode
@@ -416,6 +514,29 @@
       document.getElementById("qr-code").innerHTML = "";
     }
 
+    let _pendingUploadParams = null;
+    let _selectedSessionDsid = null;
+    let _pollInterval = null;
+
+    function confirmSessionSelection(dsid) {
+      const modal = bootstrap.Modal.getInstance(document.getElementById("select-session-modal"));
+      if (modal) modal.hide();
+
+      if (dsid === null) {
+        _selectedSessionDsid = "new";
+        if (_pendingUploadParams) startUploadRequest(_pendingUploadParams);
+        return;
+      }
+      if (dsid === undefined) {
+        const checked = document.querySelector('#session-list input[type="radio"]:checked');
+        if (!checked) { showStatus("Please select a session.", "warning"); return; }
+        dsid = checked.value;
+      }
+
+      _selectedSessionDsid = dsid;
+      if (_pendingUploadParams) startUploadRequest(_pendingUploadParams);
+    }
+
     async function doUpload() {
       const orcid = state.orcid;
       const project_id = document.getElementById("project").value;
@@ -434,30 +555,73 @@
         return;
       }
 
+      clearStatus();
+      _selectedSessionDsid = null;
+
+      const uploadParams = {
+        orcid,
+        project_id,
+        instrument_name,
+        session_folder_path,
+        sample_unique_id: document.getElementById("sample-uid").value.trim() || null,
+        comments: document.getElementById("comments").value.trim(),
+      };
+
+      try {
+        const checkRes = await fetch("/api/session/check", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(uploadParams),
+        });
+        const checkData = await checkRes.json();
+
+        if (checkRes.ok && checkData.sessions) {
+          if (checkData.sessions.length === 1) {
+            _selectedSessionDsid = checkData.sessions[0].unique_id;
+          } else if (checkData.sessions.length > 1) {
+            _pendingUploadParams = uploadParams;
+            const listEl = document.getElementById("session-list");
+            listEl.innerHTML = "";
+            checkData.sessions.forEach((s, i) => {
+              const label = s.dataset_name + (s.creation_time ? ` (created: ${s.creation_time})` : "");
+              listEl.innerHTML += `
+                <label class="list-group-item d-flex align-items-center">
+                  <input type="radio" name="session-choice" class="form-check-input me-2" value="${s.unique_id}" ${i === 0 ? "checked" : ""} />
+                  <span>${label}</span>
+                </label>`;
+            });
+            const modal = new bootstrap.Modal(document.getElementById("select-session-modal"));
+            modal.show();
+            return;
+          }
+        }
+      } catch (e) {
+        showStatus("Session check failed: " + e.message, "danger");
+        return;
+      }
+
+      startUploadRequest(uploadParams);
+    }
+
+    async function startUploadRequest(params) {
       setSpinner("upload", true);
       document.getElementById("btn-upload").disabled = true;
-      clearStatus();
       resetUploadModal();
 
-      // Show the modal with a spinner
       if (!uploadModal) {
         uploadModal = new bootstrap.Modal(document.getElementById("upload-modal"));
       }
       uploadModal.show();
       setProgress(50, "Running upload flow...");
 
+      const body = { ...params };
+      if (_selectedSessionDsid !== null) body.session_dsid = _selectedSessionDsid;
+
       try {
         const res = await fetch("/api/upload", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            orcid,
-            project_id,
-            instrument_name,
-            session_folder_path,
-            sample_unique_id: document.getElementById("sample-uid").value.trim() || null,
-            comments: document.getElementById("comments").value.trim(),
-          }),
+          body: JSON.stringify(body),
         });
 
         const data = await res.json();
@@ -495,13 +659,14 @@
     // Poll flow run until complete, then show Crucible link + QR
     // -------------------------------------------------------------------------
     function pollFlowRun(flowRunId, projectId) {
-      const interval = setInterval(async () => {
+      if (_pollInterval) clearInterval(_pollInterval);
+      _pollInterval = setInterval(async () => {
         try {
           const res = await fetch("/api/flow-run/" + flowRunId);
           const data = await res.json();
 
           if (data.status === "COMPLETED") {
-            clearInterval(interval);
+            clearInterval(_pollInterval);
             const bar = document.getElementById("progress-bar");
             bar.classList.remove("progress-bar-striped", "progress-bar-animated");
             bar.classList.add("bg-success");
@@ -521,7 +686,7 @@
               new QRCode(qrContainer, { text: datasetUrl, width: 256, height: 256 });
             }
           } else if (data.status === "FAILED" || data.status === "CRASHED" || data.status === "CANCELLED") {
-            clearInterval(interval);
+            clearInterval(_pollInterval);
             const bar = document.getElementById("progress-bar");
             bar.classList.remove("progress-bar-striped", "progress-bar-animated");
             bar.classList.add("bg-danger");
@@ -565,6 +730,18 @@
     function clearStatus() {
       document.getElementById("status-box").innerHTML = "";
     }
+
+    document.getElementById("upload-modal").addEventListener("hidden.bs.modal", function () {
+      if (_pollInterval) { clearInterval(_pollInterval); _pollInterval = null; }
+      _pendingUploadParams = null;
+      _selectedSessionDsid = null;
+      document.getElementById("session-folder").value = "";
+      document.getElementById("sample-name").value = "";
+      document.getElementById("sample-uid").value = "";
+      document.getElementById("description").value = "";
+      document.getElementById("comments").value = "";
+      clearStatus();
+    });
 
     init();
   </script>

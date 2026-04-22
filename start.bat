@@ -1,4 +1,4 @@
-call "c:\programdata]anaconda3\condabin\conda.bat" activate
+call "c:\programdata\anaconda3\condabin\conda.bat" activate
 cd /d "%dp0"
 
 set PREFECT_API_URL=http://127.0.0.1:4200/api
@@ -15,4 +15,3 @@ cmd /c uv run python main.py
 
 :: Clean up on exit (always runs after main.py stops)
 taskkill /f /im prefect.exe 2>nul
-
