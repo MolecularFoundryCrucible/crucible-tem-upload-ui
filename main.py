@@ -12,10 +12,12 @@ from flask import Flask, jsonify, render_template, request
 
 import prefect_backend as backend
 from instrument_conf import DEFAULT_BROWSE_DIR, IS_SESSION, DEFAULT_INSTRUMENT_NAME, PRINT_BARCODE_ENABLED, INSTRUMENTS, INSTRUMENT_FLOWS
+from ai_services import voice_bp, extract_keywords
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(funcName)s: %(message)s")
 
 app = Flask(__name__)
+app.register_blueprint(voice_bp)
 
 # Tkinter must run on the main thread. Flask runs in a background thread.
 # We use two queues to hand off dialog requests/results between threads.
@@ -174,7 +176,7 @@ def do_upload():
     session_dsid = data.get("session_dsid", None)
     session_folder_path = data["session_folder_path"].strip()
     comments = data.get("comments", "").strip()
-    kw_list = []
+    kw_list = data.get("keywords", []) or extract_keywords(comments, instrument_name)
 
     # Look up the Prefect deployment for this instrument
     deployment_name = INSTRUMENT_FLOWS.get(instrument_name)

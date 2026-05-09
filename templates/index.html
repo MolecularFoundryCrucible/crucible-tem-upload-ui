@@ -156,6 +156,20 @@
                     placeholder="Any notes about this session (optional)..."></textarea>
         </div>
         <small id="voice-status" class="form-text text-muted d-none">Listening...</small>
+
+        <label class="form-label fw-semibold mt-3">Keywords</label>
+        <div class="d-flex gap-2 align-items-start">
+          <button class="btn btn-outline-primary btn-sm" type="button" onclick="extractKeywords()" id="btn-extract-kw">
+            <span id="spinner-extract-kw" class="spinner-border spinner-border-sm d-none me-1" role="status"></span>
+            Extract from Comments
+          </button>
+          <div id="keywords-container" class="d-flex flex-wrap gap-1 flex-grow-1"></div>
+        </div>
+        <div class="input-group input-group-sm mt-2" style="max-width: 300px;">
+          <input id="kw-input" type="text" class="form-control" placeholder="Add keyword..."
+                 onkeydown="if(event.key==='Enter'){event.preventDefault(); addKeywordFromInput()}" />
+          <button class="btn btn-outline-secondary" type="button" onclick="addKeywordFromInput()">+</button>
+        </div>
       </div>
     </div>
 
@@ -587,6 +601,7 @@
         session_folder_path,
         sample_unique_id: document.getElementById("sample-uid").value.trim() || null,
         comments: document.getElementById("comments").value.trim(),
+        keywords: getKeywords(),
       };
 
       try {
@@ -762,89 +777,15 @@
       document.getElementById("sample-uid").value = "";
       document.getElementById("description").value = "";
       document.getElementById("comments").value = "";
+      _keywords = [];
+      renderKeywords();
       clearStatus();
     });
-
-    // -------------------------------------------------------------------------
-    // Voice Input (Web Speech API)
-    // -------------------------------------------------------------------------
-    let _recognition = null;
-    let _voiceActive = false;
-
-    function toggleVoice() {
-      if (_voiceActive) {
-        stopVoice();
-      } else {
-        startVoice();
-      }
-    }
-
-    function startVoice() {
-      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-      if (!SpeechRecognition) {
-        showStatus("Speech recognition is not supported in this browser. Use Chrome or Edge.", "warning");
-        return;
-      }
-
-      _recognition = new SpeechRecognition();
-      _recognition.continuous = true;
-      _recognition.interimResults = true;
-      _recognition.lang = "en-US";
-
-      const comments = document.getElementById("comments");
-      const baseText = comments.value;
-
-      _recognition.onresult = function (event) {
-        let final = "";
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          if (event.results[i].isFinal) {
-            final += event.results[i][0].transcript;
-          }
-        }
-        if (final) {
-          comments.value = comments.value + final;
-        }
-      };
-
-      _recognition.onerror = function (event) {
-        if (event.error !== "no-speech") {
-          showStatus("Voice error: " + event.error, "warning");
-        }
-        stopVoice();
-      };
-
-      _recognition.onend = function () {
-        if (_voiceActive) {
-          _recognition.start();
-        }
-      };
-
-      _recognition.start();
-      _voiceActive = true;
-
-      if (comments.value.length > 0 && !comments.value.endsWith("\n")) {
-        comments.value = comments.value.trimEnd() + ".\n";
-      }
-
-      document.getElementById("btn-voice").classList.remove("btn-outline-secondary");
-      document.getElementById("btn-voice").classList.add("btn-danger");
-      document.getElementById("voice-status").classList.remove("d-none");
-    }
-
-    function stopVoice() {
-      _voiceActive = false;
-      if (_recognition) {
-        _recognition.stop();
-        _recognition = null;
-      }
-      document.getElementById("btn-voice").classList.remove("btn-danger");
-      document.getElementById("btn-voice").classList.add("btn-outline-secondary");
-      document.getElementById("voice-status").classList.add("d-none");
-    }
 
     init();
   </script>
 
+  <script src="{{ url_for('static', filename='js/ai_services.js') }}"></script>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
