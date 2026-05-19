@@ -1,18 +1,49 @@
 """
 Backend functions for the Crucible upload UI.
-Replace these stubs with your real implementations.
 """
 import re
+import time
+import threading
 from pathlib import Path
 import subprocess as sp
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from crucible import CrucibleClient
 from crucible.models import BaseDataset
 import logging
-from prefect import flow, task
-from prefect.logging import get_run_logger
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.DEBUG)
+
+_CHILD_UPLOAD_WORKERS = 4
+
+# Per-thread job id, propagated into ThreadPoolExecutor workers so that
+# concurrent uploads can have their own log files via a logging.Filter.
+_thread_job = threading.local()
+
+
+def get_current_job_id() -> str | None:
+    return getattr(_thread_job, 'job_id', None)
+
+
+def set_current_job_id(job_id: str | None) -> None:
+    _thread_job.job_id = job_id
+
+
+def _run_in_job_context(parent_job_id, fn, *args, **kwargs):
+    set_current_job_id(parent_job_id)
+    return fn(*args, **kwargs)
+
+
+def _with_retries(fn, *args, retries=3, delay=5, **kwargs):
+    """Call fn(*args, **kwargs) with simple retry-on-exception. Last exception re-raised."""
+    for attempt in range(retries):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as e:
+            if attempt == retries - 1:
+                raise
+            logger.warning(f"{fn.__name__} attempt {attempt+1}/{retries} failed: {e}; retrying in {delay}s")
+            time.sleep(delay)
 
 
 class MultipleSessionsFound(Exception):
@@ -198,7 +229,6 @@ def check_existing_sessions(session_folder_path: str, orcid: str, project_id: st
     ]
 
 
-@task(retries=3, retry_delay_seconds=5)
 def create_session(session_folder_path: str, kw_list: list[str], comments: str, orcid: str,
                    project_id: str, instrument_name: str, sample_unique_id: str | None = None,
                    session_dsid: str | None = None) -> tuple[str, str]:
@@ -229,7 +259,6 @@ def create_session(session_folder_path: str, kw_list: list[str], comments: str, 
     return session_name, use_session_dsid
 
 
-@task
 def identify_session_files(session_folder_path: str) -> list[str]:
     from instrument_conf import ACCEPTABLE_FILE_TYPES
     max_size = 20 * 1024 ** 3  # 20 GiB
@@ -240,9 +269,7 @@ def identify_session_files(session_folder_path: str) -> list[str]:
     ]
 
 
-@task(retries=3, retry_delay_seconds=10)
 def copy_all_files_to_gdrive(session_folder_path: str, instrument_name: str) -> None:
-    logger = get_run_logger()
     p = Path(session_folder_path)
     relative_folder_path = p.relative_to(p.anchor).as_posix()
     dest = f"{instrument_name}-gdrive:/crucible-uploads/{instrument_name}/{relative_folder_path}"
@@ -264,7 +291,6 @@ def _compute_sha256(file_path: str) -> str:
     return h.hexdigest()
 
 
-@task
 def create_dataset(files: list[str],
                    instrument_name: str | None = None,
                    project_id: str | None = None,
@@ -272,8 +298,6 @@ def create_dataset(files: list[str],
                    session_name: str | None = None,
                    kw_list: list[str] = [],
                    comments: str | None = None) -> str:
-    logger = get_run_logger()
-
     # Dedup + retry resume: for each file, check if an associated file with the
     # same SHA256 already exists in a dataset for this session. If found, pass
     # that unique_id to BaseDataset so datasets.create() runs against the existing
@@ -319,7 +343,6 @@ def create_dataset(files: list[str],
     return new_ds_dsid
 
 
-@task(retries=3, retry_delay_seconds=5)
 def link_dataset_to_session(new_ds_dsid: str, session_dsid: str | None = None):
     if session_dsid is not None:
         response = client.datasets.link_parent_child(parent_dataset_id=session_dsid, child_dataset_id=new_ds_dsid)
@@ -327,63 +350,36 @@ def link_dataset_to_session(new_ds_dsid: str, session_dsid: str | None = None):
     return None
 
 
-@task(retries=3, retry_delay_seconds=5)
 def link_dataset_and_sample(new_ds_dsid: str, sample_unique_id: str | None = None):
     if sample_unique_id is not None:
         response = client.samples.add_to_dataset(dataset_id = new_ds_dsid, sample_id = sample_unique_id)
         return response
     return None
 
-@task(retries=3, retry_delay_seconds=5)
+
 def request_insitu_aggregation(new_ds_dsid: str):
     response = client.datasets.request_insitu_aggregation(new_ds_dsid)
     return response
 
 
-RESULTS_DIR = Path(".flow_results")
-RESULTS_DIR.mkdir(exist_ok=True)
-
-
-def _save_flow_result(dsid: str):
-    from prefect.runtime import flow_run
-    (RESULTS_DIR / str(flow_run.id)).write_text(dsid)
-
-
-def _run_name(prefix):
-    def generate():
-        from prefect.runtime import flow_run
-        fileinput = flow_run.parameters.get('file', None)
-        if fileinput is None:
-            fileinput = flow_run.parameters.get('files', [None])[0]
-        return f"{prefix}-{Path(fileinput).name}"
-    return generate
-
-# flow to upload an insitu dataset
-@flow(flow_run_name=_run_name("insitu-upload"), persist_result=True)
 def insitu_upload(file: str,
-                  instrument_name: str, 
+                  instrument_name: str,
                   project_id: str,
                   orcid: str,
                   sample_unique_id: str | None = None,
                   session_dsid: str | None = None,
                   kw_list: list[str] = [],
                   comments: str | None = None) -> str:
-    
-    # create the dataset
-    new_ds_dsid = create_dataset(files = [file],
-                                 instrument_name = None,
-                                 project_id = project_id,
-                                 orcid = orcid, 
+    new_ds_dsid = create_dataset(files=[file],
+                                 instrument_name=None,
+                                 project_id=project_id,
+                                 orcid=orcid,
                                  kw_list=kw_list,
                                  comments=comments)
-
-    # request post processing
-    aggregation_status = request_insitu_aggregation(new_ds_dsid)
-    _save_flow_result(new_ds_dsid)
+    _with_retries(request_insitu_aggregation, new_ds_dsid)
     return new_ds_dsid
 
-# sub flow to upload a dataset as the child of a session
-@flow(flow_run_name=_run_name("upload"))
+
 def upload_child_dataset(files: list,
                          instrument_name: str,
                          project_id: str,
@@ -393,99 +389,70 @@ def upload_child_dataset(files: list,
                          sample_unique_id: str | None = None,
                          kw_list: list[str] = [],
                          comments: str | None = None) -> str:
-    
-    new_ds_dsid = create_dataset(files = files,
-                                 instrument_name = instrument_name,
+    new_ds_dsid = create_dataset(files=files,
+                                 instrument_name=instrument_name,
                                  project_id=project_id,
                                  orcid=orcid,
                                  session_name=session_name,
                                  kw_list=kw_list,
                                  comments=comments)
 
-    link_dataset_to_session(new_ds_dsid, session_dsid)
-    link_dataset_and_sample(new_ds_dsid, sample_unique_id)
+    _with_retries(link_dataset_to_session, new_ds_dsid, session_dsid)
+    _with_retries(link_dataset_and_sample, new_ds_dsid, sample_unique_id)
     return new_ds_dsid
 
-# flow to upload a session of TEM data
-@flow(flow_run_name=_run_name("tem-session"), persist_result=True)
+
 def tem_session_upload(file: str, instrument_name: str, project_id: str, orcid: str,
                        sample_unique_id: str | None = None, session_dsid: str | None = None,
                        kw_list: list[str] = [], comments: str | None = None) -> str:
-    import time
-    import os
-    import requests as req
-    from prefect.deployments import run_deployment
-    logger = get_run_logger()
-
     session_folder_path = file
 
     check_session_depth(session_folder_path)
 
     copy_all_files_to_gdrive(session_folder_path, instrument_name)
 
-    session_name, session_dsid = create_session(
+    session_name, session_dsid = _with_retries(
+        create_session,
         session_folder_path, kw_list, comments or "",
         orcid, project_id, instrument_name, sample_unique_id,
-        session_dsid=session_dsid)
+        session_dsid=session_dsid,
+    )
 
-    # returns list of files in folder path that are less than 20GB 
-    # with an accepted file type
     session_files = identify_session_files(session_folder_path)
-    logger.info(f'{session_files=}')
-    # Submit all child flows in parallel (timeout=0 returns immediately)
-    child_runs = []
-    for f in session_files:
-        time.sleep(0.3)
-        dsfiles = [f]
-        if f.endswith('ser'):
-            dsfiles.append(get_emi_file_name(f))
+    logger.info(f'{len(session_files)} files to upload: {session_files=}')
 
-        run = run_deployment(
-            "upload-child-dataset/upload-child-dataset",
-            parameters={
-                "files": dsfiles,
-                "instrument_name": instrument_name,
-                "project_id": project_id,
-                "orcid": orcid,
-                "session_name": session_name,
-                "session_dsid": session_dsid,
-                "sample_unique_id": sample_unique_id,
-                "kw_list": kw_list,
-                "comments": comments,
-            },
-            timeout=0,
-        )
-        child_runs.append(run)
-        logger.info(f"Submitted child flow for {Path(f).name}: {run.id}")
-
-    # Wait for all children to reach a terminal state
-    terminal_states = {"COMPLETED", "FAILED", "CRASHED", "CANCELLED"}
-    pending = {str(r.id) for r in child_runs}
+    parent_job_id = get_current_job_id()
     failed = []
+    with ThreadPoolExecutor(max_workers=_CHILD_UPLOAD_WORKERS) as ex:
+        future_to_file = {}
+        for f in session_files:
+            dsfiles = [f]
+            if f.endswith('ser'):
+                dsfiles.append(get_emi_file_name(f))
+            fut = ex.submit(
+                _run_in_job_context, parent_job_id,
+                upload_child_dataset,
+                dsfiles, instrument_name, project_id, orcid,
+                session_name, session_dsid, sample_unique_id, kw_list, comments,
+            )
+            future_to_file[fut] = f
 
-    while pending:
-        time.sleep(5)
-        still_pending = set()
-        for rid in pending:
-            api_url = os.environ.get("PREFECT_API_URL", "http://127.0.0.1:4200/api")
+        for fut in as_completed(future_to_file):
+            f = future_to_file[fut]
             try:
-                resp = req.get(f"{api_url}/flow_runs/{rid}", timeout=10)
-                resp.raise_for_status()
-                state = resp.json().get("state", {}).get("type", "")
+                child_dsid = fut.result()
+                logger.info(f"Child upload complete for {Path(f).name}: {child_dsid}")
             except Exception as e:
-                logger.warning(f"Could not poll flow run {rid}: {e}; will retry")
-                still_pending.add(rid)
-                continue
-            if state not in terminal_states:
-                still_pending.add(rid)
-            elif state != "COMPLETED":
-                failed.append(rid)
-                logger.error(f"Child flow run {rid} ended with state {state}")
-        pending = still_pending
+                failed.append((f, str(e)))
+                logger.error(f"Child upload failed for {Path(f).name}: {e}")
 
     if failed:
-        logger.error(f"{len(failed)} child flow(s) failed. Retry them from the Prefect UI.")
+        logger.error(f"{len(failed)}/{len(session_files)} child upload(s) failed")
+        # Surface failures to caller so the job can be marked partially failed.
+        raise RuntimeError(
+            f"{len(failed)} of {len(session_files)} files failed to upload: "
+            + "; ".join(f"{Path(p).name}: {err}" for p, err in failed)
+        )
 
-    _save_flow_result(session_dsid)
     return session_dsid
 

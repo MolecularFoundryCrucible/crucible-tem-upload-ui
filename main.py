@@ -3,12 +3,16 @@ Crucible Upload UI — Flask backend
 """
 import logging
 import queue
+import re
 import threading
+import uuid
 import webbrowser
 import tkinter as tk
+from datetime import datetime
+from pathlib import Path
 from tkinter import filedialog
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, abort, jsonify, render_template, request, send_from_directory
 
 import prefect_backend as backend
 from instrument_conf import DEFAULT_BROWSE_DIR, IS_SESSION, DEFAULT_INSTRUMENT_NAME, PRINT_BARCODE_ENABLED, INSTRUMENTS, INSTRUMENT_FLOWS
@@ -18,6 +22,50 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(funcNam
 
 app = Flask(__name__)
 app.register_blueprint(voice_bp)
+
+LOGS_DIR = Path(".upload_logs")
+LOGS_DIR.mkdir(exist_ok=True)
+
+_jobs: dict = {}
+_jobs_lock = threading.Lock()
+
+
+class _JobFilter(logging.Filter):
+    """Only emits records whose calling thread is registered with this job_id."""
+    def __init__(self, job_id: str):
+        super().__init__()
+        self.job_id = job_id
+
+    def filter(self, record):
+        return backend.get_current_job_id() == self.job_id
+
+
+def _sanitize_for_filename(s: str) -> str:
+    return (re.sub(r'[^a-zA-Z0-9._-]+', '_', s).strip('_') or 'session')[:80]
+
+
+def _run_upload_job(job_id: str, flow_fn, params: dict, log_path: Path):
+    backend.set_current_job_id(job_id)
+    handler = logging.FileHandler(log_path)
+    handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(name)s: %(message)s'))
+    handler.addFilter(_JobFilter(job_id))
+    target_loggers = [logging.getLogger('prefect_backend'), logging.getLogger('crucible')]
+    for lg in target_loggers:
+        lg.addHandler(handler)
+    try:
+        dsid = flow_fn(**params)
+        with _jobs_lock:
+            _jobs[job_id].update({'status': 'completed', 'dsid': dsid,
+                                  'finished_at': datetime.now().isoformat()})
+    except Exception as e:
+        backend.logger.exception(f"Upload job {job_id} failed")
+        with _jobs_lock:
+            _jobs[job_id].update({'status': 'failed', 'error': str(e),
+                                  'finished_at': datetime.now().isoformat()})
+    finally:
+        for lg in target_loggers:
+            lg.removeHandler(handler)
+        handler.close()
 
 # Tkinter must run on the main thread. Flask runs in a background thread.
 # We use two queues to hand off dialog requests/results between threads.
@@ -178,56 +226,59 @@ def do_upload():
     comments = data.get("comments", "").strip()
     kw_list = data.get("keywords", []) or extract_keywords(comments, instrument_name)
 
-    # Look up the Prefect deployment for this instrument
-    deployment_name = INSTRUMENT_FLOWS.get(instrument_name)
-    if not deployment_name:
+    flow_fn = INSTRUMENT_FLOWS.get(instrument_name)
+    if not flow_fn:
         return jsonify({"error": f"No upload flow configured for instrument '{instrument_name}'"}), 400
 
-    try:
-        from prefect.deployments import run_deployment
-        flow_run = run_deployment(
-            deployment_name,
-            parameters={
-                "file": session_folder_path,
-                "instrument_name": instrument_name,
-                "project_id": project_id,
-                "orcid": orcid,
-                "sample_unique_id": sample_unique_id,
-                "session_dsid": session_dsid,
-                "kw_list": kw_list,
-                "comments": comments,
-            },
-            timeout=0,  # return immediately, monitor in Prefect UI
-        )
-        return jsonify({"flow_run_id": str(flow_run.id), "project_id": project_id})
-    except Exception as e:
-        backend.logger.error(e)
-        return jsonify({"error": str(e)}), 500
+    job_id = uuid.uuid4().hex[:12]
+    timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+    session_basename = Path(session_folder_path).name or "session"
+    log_filename = f"{timestamp}-{_sanitize_for_filename(session_basename)}-{job_id}.log"
+    log_path = LOGS_DIR / log_filename
+
+    params = {
+        "file": session_folder_path,
+        "instrument_name": instrument_name,
+        "project_id": project_id,
+        "orcid": orcid,
+        "sample_unique_id": sample_unique_id,
+        "session_dsid": session_dsid,
+        "kw_list": kw_list,
+        "comments": comments,
+    }
+
+    with _jobs_lock:
+        _jobs[job_id] = {
+            "status": "running",
+            "project_id": project_id,
+            "session_folder_path": session_folder_path,
+            "log_filename": log_filename,
+            "started_at": datetime.now().isoformat(),
+        }
+
+    threading.Thread(
+        target=_run_upload_job,
+        args=(job_id, flow_fn, params, log_path),
+        daemon=True,
+    ).start()
+
+    return jsonify({"job_id": job_id, "project_id": project_id, "log_filename": log_filename})
 
 
-@app.get("/api/flow-run/<flow_run_id>")
-def flow_run_status(flow_run_id):
-    from prefect.client.orchestration import get_client
-    from pathlib import Path
-    import asyncio
+@app.get("/api/job/<job_id>")
+def job_status(job_id):
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+    if not job:
+        return jsonify({"error": "job not found"}), 404
+    return jsonify(job)
 
-    async def _get_status():
-        async with get_client() as prefect_client:
-            flow_run = await prefect_client.read_flow_run(flow_run_id)
-            return {
-                "status": flow_run.state.type.value,
-                "name": flow_run.state.name,
-            }
 
-    try:
-        result = asyncio.run(_get_status())
-        # Read persisted result from shared file
-        result_file = Path(".flow_results") / flow_run_id
-        if result_file.exists():
-            result["result"] = result_file.read_text()
-        return jsonify(result)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+@app.get("/logs/<path:filename>")
+def serve_log(filename):
+    if "/" in filename or ".." in filename:
+        abort(400)
+    return send_from_directory(LOGS_DIR.resolve(), filename, mimetype="text/plain")
 
 
 if __name__ == "__main__":

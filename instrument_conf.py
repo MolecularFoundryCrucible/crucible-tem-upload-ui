@@ -3,10 +3,11 @@ IS_SESSION = True # Set to False if the instrument doesn't have sessions, and fi
 INSTRUMENTS=["titanx", "themis", "team1",  "team05", 'spectre', "insitu_pl"] # you can add your instrument here
 DEFAULT_INSTRUMENT_NAME = 'titanx'
 
-# Maps instrument names to their Prefect deployment name (flow-name/deployment-name)
+# Maps instrument names to the backend entrypoint function to run for an upload.
+from prefect_backend import insitu_upload, tem_session_upload
 INSTRUMENT_FLOWS = {
-    "insitu_pl": "insitu-upload/insitu-upload",
-    "titanx": "tem-session-upload/tem-session-upload",  # add when ready
+    "insitu_pl": insitu_upload,
+    "titanx": tem_session_upload,
 }
 
 PRINT_BARCODE_ENABLED = False

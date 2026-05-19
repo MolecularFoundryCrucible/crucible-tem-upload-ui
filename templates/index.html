@@ -207,8 +207,8 @@
           <!-- Links section (hidden until submission) -->
           <div id="qr-section" class="text-center mt-4 d-none">
             <p>
-              Monitor your data upload
-              <a id="prefect-link" href="#" target="_blank">here</a>.
+              View the upload log
+              <a id="log-link" href="#" target="_blank">here</a>.
             </p>
             <p class="d-none">
               View your data in
@@ -664,15 +664,14 @@
         const data = await res.json();
 
         if (res.ok) {
-          setProgress(30, "Flow submitted, running...");
-          // Show Prefect monitoring link immediately
-          const prefectUrl = "http://127.0.0.1:4200/flow-runs/flow-run/" + data.flow_run_id;
-          document.getElementById("prefect-link").href = prefectUrl;
+          setProgress(30, "Upload submitted, running...");
+          // Show log file link immediately
+          document.getElementById("log-link").href = "/logs/" + data.log_filename;
           document.getElementById("qr-section").classList.remove("d-none");
           document.getElementById("upload-modal-footer").classList.remove("d-none");
 
           // Poll for completion
-          pollFlowRun(data.flow_run_id, data.project_id);
+          pollJob(data.job_id, data.project_id);
         } else {
           const bar = document.getElementById("progress-bar");
           bar.classList.remove("progress-bar-striped", "progress-bar-animated");
@@ -693,16 +692,16 @@
     }
 
     // -------------------------------------------------------------------------
-    // Poll flow run until complete, then show Crucible link + QR
+    // Poll job until complete, then show Crucible link + QR
     // -------------------------------------------------------------------------
-    function pollFlowRun(flowRunId, projectId) {
+    function pollJob(jobId, projectId) {
       if (_pollInterval) clearInterval(_pollInterval);
       _pollInterval = setInterval(async () => {
         try {
-          const res = await fetch("/api/flow-run/" + flowRunId);
+          const res = await fetch("/api/job/" + jobId);
           const data = await res.json();
 
-          if (data.status === "COMPLETED") {
+          if (data.status === "completed") {
             clearInterval(_pollInterval);
             const bar = document.getElementById("progress-bar");
             bar.classList.remove("progress-bar-striped", "progress-bar-animated");
@@ -712,17 +711,17 @@
             document.getElementById("upload-modal-header").classList.add("bg-success", "text-white");
 
             // Show Crucible link + QR code
-            const sessionDsid = data.result;
+            const sessionDsid = data.dsid;
             if (sessionDsid && projectId) {
               const crucibleBaseUrl = "https://crucible-graph-explorer-776258882599.us-central1.run.app";
-              const datasetUrl = crucibleBaseUrl + "/" + projectId + "/dataset/" + sessionDsid;
+              const datasetUrl = crucibleBaseUrl + "/" + projectId + "/datasets/" + sessionDsid;
               document.getElementById("crucible-link").href = datasetUrl;
               document.getElementById("crucible-link").parentElement.classList.remove("d-none");
               const qrContainer = document.getElementById("qr-code");
               qrContainer.innerHTML = "";
               new QRCode(qrContainer, { text: datasetUrl, width: 256, height: 256 });
             }
-          } else if (data.status === "FAILED" || data.status === "CRASHED" || data.status === "CANCELLED") {
+          } else if (data.status === "failed") {
             clearInterval(_pollInterval);
             const bar = document.getElementById("progress-bar");
             bar.classList.remove("progress-bar-striped", "progress-bar-animated");
@@ -730,10 +729,15 @@
             document.getElementById("progress-label").textContent = "Upload failed";
             document.getElementById("upload-modal-title").textContent = "Upload Failed";
             document.getElementById("upload-modal-header").classList.add("bg-danger", "text-white");
-            showStatus("Flow run failed. Check the Prefect UI for details.", "danger");
+            const logUrl = "/logs/" + data.log_filename;
+            showStatus(
+              (data.error || "Upload failed.") +
+                ' <a href="' + logUrl + '" target="_blank" class="alert-link">Open log file</a>.',
+              "danger"
+            );
           } else {
-            // Still running — update progress label
-            setProgress(50, "Running: " + (data.name || "processing..."));
+            // Still running
+            setProgress(50, "Running upload...");
           }
         } catch (e) {
           // Polling error — keep trying
