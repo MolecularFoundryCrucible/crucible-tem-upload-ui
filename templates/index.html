@@ -19,6 +19,7 @@
     }
     .spinner-border-sm { width: 1rem; height: 1rem; }
     #status-box { min-height: 2.5rem; }
+    #project { text-overflow: ellipsis; }
   </style>
 </head>
 <body>
@@ -314,7 +315,7 @@
       if (prefillEmail) {
         document.getElementById("email").value = prefillEmail;
         await lookupUser();
-        if (prefillProject && state.projects.includes(prefillProject)) {
+        if (prefillProject && state.projects.some(p => p.project_id === prefillProject)) {
           document.getElementById("project").value = prefillProject;
         }
       }
@@ -365,12 +366,26 @@
       }
       projects.forEach(p => {
         const opt = document.createElement("option");
-        opt.value = p;
-        opt.textContent = p.startsWith("MFUSER_") ? p + " (Internal Research)" : p;
+        opt.value = p.project_id;
+        const base = p.project_id.startsWith("MFUSER_")
+          ? p.project_id + " (Internal Research)" : p.project_id;
+        const label = (p.title && p.title !== p.project_id) ? base + " - " + p.title : base;
+        opt.textContent = label;
+        opt.title = label;
         sel.appendChild(opt);
       });
       sel.disabled = false;
+      syncProjectTooltip();
     }
+
+    // Keep the collapsed select's tooltip in sync with the selected option,
+    // so hovering the box reliably shows the full "project_id - title".
+    function syncProjectTooltip() {
+      const sel = document.getElementById("project");
+      const opt = sel.options[sel.selectedIndex];
+      sel.title = opt ? opt.textContent : "";
+    }
+    document.getElementById("project").addEventListener("change", syncProjectTooltip);
 
     // Clear user info when email is manually cleared
     document.getElementById("email").addEventListener("input", function () {

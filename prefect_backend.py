@@ -70,7 +70,7 @@ def lookup_user_by_email(email: str) -> dict:
     Returns a dict with keys:
         name    (str) display name
         orcid   (str) ORCID identifier
-        projects (list[str]) list of project ids representing projects the user belongs to
+        projects (list[dict]) list of {project_id, title} dicts for the user's projects
 
     Returns an empty dict if the user is not found.
     """
@@ -82,12 +82,13 @@ def lookup_user_by_email(email: str) -> dict:
     user_name = f"{user_info['first_name']} {user_info['last_name']}"
     logger.info(f"User name for email '{email}' is: {user_name}")
     projects = client.projects.list(user_info['unique_id'])
-    project_ids = [x['project_id'] for x in projects]
-    project_ids.sort()
-    logger.info(f"Projects for email '{email}' are: {project_ids}")
+    project_list = [{'project_id': x['project_id'], 'title': x.get('title') or ''}
+                    for x in projects]
+    project_list.sort(key=lambda p: p['project_id'])
+    logger.info(f"Projects for email '{email}' are: {project_list}")
     return {'name': user_name,
             'orcid': user_info['unique_id'],
-            'projects': project_ids}
+            'projects': project_list}
 
 
 def lookup_sample(sample_name: str | None = None, sample_unique_id: str | None = None, project_id: str | None = None) -> dict:
