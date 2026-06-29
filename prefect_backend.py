@@ -81,7 +81,7 @@ def lookup_user_by_email(email: str) -> dict:
 
     user_name = f"{user_info['first_name']} {user_info['last_name']}"
     logger.info(f"User name for email '{email}' is: {user_name}")
-    projects = client.projects.list(user_info['unique_id'])
+    projects = client.projects.list(user_info['unique_id'], limit = None)
     project_list = [{'project_id': x['project_id'], 'title': x.get('title') or ''}
                     for x in projects]
     project_list.sort(key=lambda p: p['project_id'])
@@ -347,7 +347,7 @@ def create_dataset(files: list[str],
     except Exception:
         if dsid:
             try:
-                associated = client.datasets.get_associated_files(dsid)
+                associated = client.datasets.list_files(dsid)
                 if not any(f.get('storage_path') for f in associated):
                     client.deletions.request(dsid, reason=f"file upload failed; empty dataset {dsid}")
                     logger.warning(f"Upload failed; requested deletion of empty dataset {dsid}")
