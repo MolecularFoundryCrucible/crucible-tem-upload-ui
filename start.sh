@@ -14,7 +14,7 @@ PREFECT_PID=$!
 sleep 3
 
 # Start flow server in the background
-uv run serve_flows.py &
+uv run serve_flows.py > ./serve_flows.log 2>&1 &
 FLOWS_PID=$!
 
 # Start the Flask app (foreground)
