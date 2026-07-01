@@ -174,13 +174,12 @@ def get_emi_file_name(serfile: str) -> str:
     no_rep = re.sub('_[0-9]*$', '', no_ext)
     return f"{no_rep}.emi"
 
-def check_session_depth(session_folder_path: str, min_depth: int = 3) -> None:
+def check_session_depth(session_folder_path: str, min_depth: int = 1) -> None:
     parts = Path(session_folder_path).resolve().parts
-    if len(parts) - 1 <min_depth:  # subtract 1 to not count the root
+    if len(parts) - 1 < min_depth:  # subtract 1 to not count the root
         raise ValueError(f"Session folder is too close to the filesystem root. Please select a folder at least {min_depth} levels deep.")
     else:
         return
-
 
 def check_existing_sessions(session_folder_path: str, orcid: str, project_id: str,
                             instrument_name: str) -> list[dict]:
