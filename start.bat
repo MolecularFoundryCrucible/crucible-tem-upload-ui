@@ -1,6 +1,12 @@
 call "c:\programdata\anaconda3\condabin\conda.bat" activate
 cd /d "%~dp0"
 
+:: Parse optional --port=XXXX argument (default 5000)
+set FLASK_PORT=5000
+for %%A in (%*) do (
+  echo %%A | findstr /b "--port=" >nul && for /f "tokens=2 delims==" %%B in ("%%A") do set FLASK_PORT=%%B
+)
+
 set PREFECT_API_URL=http://127.0.0.1:4200/api
 
 :: Start Prefect server in the background

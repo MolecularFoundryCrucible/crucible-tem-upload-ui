@@ -26,6 +26,75 @@ POST_PROCESSING_REQUESTS = {
 # False = request all of them in parallel (independent of each other).
 CHAIN_POST_PROCESSING = True
 
+# Maps instrument name to UI mode.
+# 'multi_assignment' — replaces the single-sample lookup with a per-file
+#                      sample assignment grid (requires a FILE_PARSERS entry
+#                      in instrument_plugins.py for that instrument).
+# Instruments not listed use the default single-sample lookup UI.
+AVAILABLE_INGESTORS = [
+    'AFMIngestor',
+    'PtychographyH5Ingestor',
+    'SimpleTiledImageScopeFoundryH5Ingestor',
+    'BioGlowIngestor',
+    'QSpleemSVRampIngestor',
+    'QSpleemSVRampSpinIngestor',
+    'QSpleemImageIngestor',
+    'QSpleemSPLEEMImageIngestor',
+    'QSpleemDepositionMonitorIngestor',
+    'QSpleemARRESEKIngestor',
+    'QSpleemARRESMMIngestor',
+    'RgaTeyBatchIngestor',
+    'CanonCaptureScopeFoundryH5Ingestor',
+    'SingleSpecScopeFoundryH5Ingestor',
+    'HyperspecScopeFoundryH5Ingestor',
+    'HyperspecSweepScopeFoundryH5Ingestor',
+    'ToupcamLiveScopeFoundryH5Ingestor',
+    'CLSyncRasterScanIngestor',
+    'CLHyperspecIngestor',
+    'SpinbotSpecLineIngestor',
+    'SpinbotCameraCaptureIngestor',
+    'SpinbotPhotoRunIngestor',
+    'InSituPlIngestor',
+    'CziIngestor',
+    'DigitalMicrographIngestor',
+    'EmiIngestor',
+    'SerIngestor',
+    'BcfIngestor',
+    'BerkeleyEmdIngestor',
+    'VeloxEmdIngestor',
+    'SpinbotSpecRunIngestor',
+    'ImageIngestor',
+    'NirvanaMultiPosLineScanIngestor',
+    'ScopeFoundryH5Ingestor',
+    'H5Ingestor',
+]
+
+# Default ingestor per instrument. Must be a value from AVAILABLE_INGESTORS or ''.
+# Leave an instrument out (or set to '') to use Crucible's server-side default.
+INSTRUMENT_INGESTORS = {
+    'nirvana': 'NirvanaMultiPosLineScanIngestor',
+}
+
+INSTRUMENT_UI_MODE = {
+    'nirvana': 'multi_assignment',
+}
+
+# Per-instrument holder layout for the "From holders" data source in multi_assignment mode.
+# Each entry is a list of holders in display order; 'slots' is the expected number of
+# child samples per holder.  When Crucible gains a layout metadata field on holder samples
+# these values become the fallback — the API response takes precedence.
+INSTRUMENT_HOLDER_LAYOUT = {
+    'nirvana': [
+        {'label': 'Tray A', 'slots': 8},
+        {'label': 'Tray B', 'slots': 8},
+    ],
+}
+
+# For instruments in multi_assignment mode:
+# False (default) — one file → one Crucible dataset linked to all checked sample UUIDs
+# True            — one file → one Crucible dataset per sample (each linked to one UUID)
+MULTI_ASSIGNMENT_ONE_PER_SAMPLE = False
+
 PRINT_BARCODE_ENABLED = False
 ACCEPTABLE_FILE_TYPES = {'.bcf', '.dm3', '.dm4', '.emd', '.h5', '.mcr', '.ser', '.txt'}
 

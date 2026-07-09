@@ -342,7 +342,8 @@ def create_dataset(files: list[str],
                    session_name: str | None = None,
                    dsid: str | None = None,
                    kw_list: list[str] = [],
-                   comments: str | None = None) -> str:
+                   comments: str | None = None,
+                   ingestor: str | None = None) -> str:
     logger = get_run_logger()
 
     ds_kwargs = {k: v for k, v in dict(
@@ -360,6 +361,7 @@ def create_dataset(files: list[str],
             scientific_metadata=scimd,
             keywords=kw_list,
             files_to_upload=files,
+            ingestor=ingestor or None,
             wait_for_ingestion_response=True,
         )
     except Exception:
@@ -386,11 +388,52 @@ def link_dataset_to_session(new_ds_dsid: str, session_dsid: str | None = None):
 
 
 @task(retries=3, retry_delay_seconds=5)
-def link_dataset_and_sample(new_ds_dsid: str, sample_unique_id: str | None = None):
-    if sample_unique_id is not None:
-        response = client.samples.add_to_dataset(dataset_id = new_ds_dsid, sample_id = sample_unique_id)
-        return response
-    return None
+def link_dataset_and_sample(new_ds_dsid: str, sample_unique_id: str | list[str] | None = None):
+    if not sample_unique_id:
+        return None
+    uuids = [sample_unique_id] if isinstance(sample_unique_id, str) else sample_unique_id
+    for uid in uuids:
+        client.samples.add_to_dataset(dataset_id=new_ds_dsid, sample_id=uid)
+    return len(uuids)
+
+def list_ingestors() -> list[str]:
+    return client.ingestions.list_ingestors()
+
+
+def resolve_holders(instrument: str, holder_uuids: list[str]) -> list[dict]:
+    """Fetch child samples for each holder UUID and return grid-ready data.
+
+    Layout (number of holders, slots per holder, labels) comes from
+    INSTRUMENT_HOLDER_LAYOUT in instrument_conf.  When Crucible gains a layout
+    metadata field on holder samples, read it via
+        client.samples.get(uuid, include_metadata=True)['scientific_metadata']
+    and use these config values as a fallback.
+    """
+    from instrument_conf import INSTRUMENT_HOLDER_LAYOUT
+    layout = INSTRUMENT_HOLDER_LAYOUT.get(instrument, [])
+    results = []
+    for i, uuid in enumerate(holder_uuids):
+        if not uuid:
+            continue
+        holder_cfg = layout[i] if i < len(layout) else {}
+        label = holder_cfg.get('label', f'Holder {i + 1}')
+        slots = holder_cfg.get('slots', 8)
+        children = client.samples.list_children(uuid)
+        samples = []
+        for j in range(slots):
+            if j < len(children):
+                c = children[j]
+                samples.append({
+                    'position': f'S{j + 1:02d}',
+                    'name': c.get('sample_name') or '',
+                    'uuid': c.get('unique_id') or '',
+                    'excluded': False,
+                })
+            else:
+                samples.append({'position': f'S{j + 1:02d}', 'name': '', 'uuid': '', 'excluded': False})
+        results.append({'basename': label, 'file': uuid, 'samples': samples})
+    return results
+
 
 @task(retries=3, retry_delay_seconds=5)
 def request_post_processing(name: str, new_ds_dsid: str):
@@ -423,7 +466,8 @@ def upload_dataset(files: list,
                    dsid: str | None = None,
                    sample_unique_id: str | None = None,
                    kw_list: list[str] = [],
-                   comments: str | None = None) -> str:
+                   comments: str | None = None,
+                   ingestor: str | None = None) -> str:
     from instrument_conf import POST_PROCESSING_REQUESTS, CHAIN_POST_PROCESSING
 
     new_ds_dsid = create_dataset(files=files,
@@ -433,7 +477,8 @@ def upload_dataset(files: list,
                                  session_name=session_name,
                                  dsid=dsid,
                                  kw_list=kw_list,
-                                 comments=comments)
+                                 comments=comments,
+                                 ingestor=ingestor)
 
     link_dataset_to_session(new_ds_dsid, session_dsid)
     link_dataset_and_sample(new_ds_dsid, sample_unique_id)
@@ -454,7 +499,8 @@ def upload_dataset(files: list,
 @flow(flow_run_name=_run_name("session"))
 def session_upload(file: str, instrument_name: str, project_id: str, orcid: str,
                        sample_unique_id: str | None = None, session_dsid: str | None = None,
-                       kw_list: list[str] = [], comments: str | None = None) -> str:
+                       kw_list: list[str] = [], comments: str | None = None,
+                       ingestor: str | None = None) -> str:
     import time
     import os
     import requests as req
@@ -505,6 +551,7 @@ def session_upload(file: str, instrument_name: str, project_id: str, orcid: str,
                 "sample_unique_id": sample_unique_id,
                 "kw_list": kw_list,
                 "comments": comments,
+                "ingestor": ingestor,
             },
             timeout=0,
         )
@@ -553,7 +600,8 @@ def multi_file_upload(files: list[str],
                       orcid: str,
                       sample_unique_id: str | None = None,
                       kw_list: list[str] = [],
-                      comments: str | None = None) -> list[str]:
+                      comments: str | None = None,
+                      ingestor: str | None = None) -> list[str]:
     import time
     from prefect.deployments import run_deployment
     logger = get_run_logger()
@@ -579,6 +627,7 @@ def multi_file_upload(files: list[str],
                 "sample_unique_id": sample_unique_id,
                 "kw_list": kw_list,
                 "comments": comments,
+                "ingestor": ingestor,
             },
             timeout=0,
         )
@@ -587,3 +636,37 @@ def multi_file_upload(files: list[str],
 
     return submitted
 
+
+@flow(flow_run_name=_run_name("multi-assignment"))
+def multi_assignment_upload(file: str,
+                   sample_uuids: list[str],
+                   project_id: str,
+                   orcid: str,
+                   instrument_name: str = "",
+                   dsid: str | None = None,
+                   kw_list: list[str] = [],
+                   comments: str | None = None,
+                   ingestor: str | None = None) -> str:
+    from instrument_conf import POST_PROCESSING_REQUESTS, CHAIN_POST_PROCESSING
+    logger = get_run_logger()
+
+    new_dsid = create_dataset(files=[file],
+                              instrument_name=instrument_name,
+                              project_id=project_id,
+                              orcid=orcid,
+                              dsid=dsid,
+                              kw_list=kw_list,
+                              comments=comments,
+                              ingestor=ingestor)
+    link_dataset_and_sample(new_dsid, sample_uuids)
+    logger.info(f"Linked {len(sample_uuids)} samples to dataset {new_dsid}")
+
+    requests = POST_PROCESSING_REQUESTS.get(instrument_name, [])
+    if CHAIN_POST_PROCESSING:
+        for name in requests:
+            request_post_processing(name, new_dsid)
+    else:
+        for name in requests:
+            request_post_processing.submit(name, new_dsid)
+
+    return new_dsid

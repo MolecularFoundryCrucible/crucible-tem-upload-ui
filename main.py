@@ -15,6 +15,7 @@ from flask import Flask, jsonify, render_template, request
 
 import crucible
 import prefect_backend as backend
+import instrument_plugins as plugins
 import instrument_conf as conf
 from ai_services import voice_bp, extract_keywords
 
@@ -86,7 +87,20 @@ def get_instruments():
         "instruments": conf.INSTRUMENTS,
         "default": conf.DEFAULT_INSTRUMENT_NAME,
         "is_session": conf.IS_SESSION,
+        "ui_modes": getattr(conf, 'INSTRUMENT_UI_MODE', {}),
+        "holder_layout": getattr(conf, 'INSTRUMENT_HOLDER_LAYOUT', {}),
+        "ingestors": getattr(conf, 'AVAILABLE_INGESTORS', []),
+        "default_ingestors": getattr(conf, 'INSTRUMENT_INGESTORS', {}),
     })
+
+
+@app.get("/api/ingestors")
+def get_ingestors():
+    try:
+        return jsonify({"ingestors": backend.list_ingestors()})
+    except Exception as e:
+        backend.logger.warning(f"list_ingestors API call failed: {e}")
+        return jsonify({"ingestors": []})
 
 
 @app.get("/api/browse")
@@ -119,8 +133,10 @@ EDITABLE_FIELDS = {
     "DEFAULT_INSTRUMENT_NAME": "str",
     "INSTRUMENT_FLOWS": "dict_str",
     "POST_PROCESSING_REQUESTS": "dict_list",
+    "INSTRUMENT_INGESTORS": "dict_str",
     "CHAIN_POST_PROCESSING": "bool",
     "PRINT_BARCODE_ENABLED": "bool",
+    "MULTI_ASSIGNMENT_ONE_PER_SAMPLE": "bool",
     "ACCEPTABLE_FILE_TYPES": "set_str",
 }
 
@@ -338,6 +354,7 @@ def do_upload():
     orcid = data["orcid"].strip()
     project_id = data["project_id"].strip()
     instrument_name = data["instrument_name"].strip()
+    ingestor = (data.get("ingestor") or "").strip() or None
     sample_unique_id = data.get("sample_unique_id", None)
     session_dsid = data.get("session_dsid", None)
     comments = data.get("comments", "").strip()
@@ -387,6 +404,7 @@ def do_upload():
                     "session_dsid": dsid,
                     "kw_list": kw_list,
                     "comments": comments,
+                    "ingestor": ingestor,
                 },
                 timeout=0,
             )
@@ -422,6 +440,7 @@ def do_upload():
                     "sample_unique_id": sample_unique_id,
                     "kw_list": kw_list,
                     "comments": comments,
+                    "ingestor": ingestor,
                 },
                 timeout=0,
             )
@@ -447,6 +466,7 @@ def do_upload():
                 "sample_unique_id": sample_unique_id,
                 "kw_list": kw_list,
                 "comments": comments,
+                "ingestor": ingestor,
             },
             timeout=0,
         )
@@ -459,12 +479,140 @@ def do_upload():
         return jsonify({"error": str(e)}), 500
 
 
+@app.post("/api/parse_files")
+def parse_files():
+    data = request.json or {}
+    instrument = (data.get("instrument") or "").strip()
+    paths = data.get("files") or []
+    if not instrument or not paths:
+        return jsonify({"error": "instrument and files required"}), 400
+    parser = plugins.FILE_PARSERS.get(instrument)
+    if parser is None:
+        return jsonify({"error": f"No file parser registered for instrument '{instrument}'"}), 400
+    results = []
+    for path in paths:
+        if not os.path.isfile(path):
+            return jsonify({"error": f"File not found: {path}"}), 400
+        try:
+            samples = parser(path)
+        except Exception as e:
+            backend.logger.error(f"Failed to parse {path}: {e}")
+            return jsonify({"error": f"Could not read {os.path.basename(path)}: {e}"}), 500
+        results.append({
+            "path": path,
+            "basename": os.path.basename(path),
+            "samples": samples,
+        })
+    return jsonify({"files": results})
+
+
+@app.post("/api/resolve_holders")
+def resolve_holders():
+    data = request.json or {}
+    instrument = (data.get("instrument") or "").strip()
+    holder_uuids = [u.strip() for u in (data.get("holder_uuids") or [])]
+    if not instrument:
+        return jsonify({"error": "instrument required"}), 400
+    if not any(holder_uuids):
+        return jsonify({"error": "at least one holder UUID required"}), 400
+    try:
+        files = backend.resolve_holders(instrument, holder_uuids)
+    except Exception as e:
+        backend.logger.error(f"resolve_holders failed: {e}")
+        return jsonify({"error": str(e)}), 500
+    return jsonify({"files": files})
+
+
+@app.post("/api/multi_assignment/upload")
+def multi_assignment_upload():
+    from prefect.deployments import run_deployment
+    data = request.json or {}
+    orcid = (data.get("orcid") or "").strip()
+    project_id = (data.get("project_id") or "").strip()
+    instrument_name = (data.get("instrument_name") or "").strip()
+    ingestor = (data.get("ingestor") or "").strip() or None
+    kw_list = data.get("kw_list") or []
+    comments = data.get("comments") or None
+    assignments = data.get("assignments") or []
+
+    if not orcid or not project_id:
+        return jsonify({"error": "orcid and project_id required"}), 400
+    if not assignments:
+        return jsonify({"error": "assignments list required"}), 400
+
+    try:
+        valid_dsids = backend.existing_dsids(orcid, project_id)
+    except Exception as e:
+        backend.logger.error(e)
+        return jsonify({"error": str(e)}), 500
+
+    one_per_sample = getattr(conf, 'MULTI_ASSIGNMENT_ONE_PER_SAMPLE', False)
+    submitted = []
+    for item in assignments:
+        file_path = item.get("file", "")
+        sample_uuids = item.get("sample_uuids") or []
+        if not file_path:
+            continue
+        try:
+            if one_per_sample:
+                for uuid in sample_uuids:
+                    dsid, _ = backend.resolve_dsid_for_file(file_path, valid_dsids)
+                    flow_run = run_deployment(
+                        "upload-dataset/upload-dataset",
+                        parameters={
+                            "files": [file_path],
+                            "instrument_name": instrument_name,
+                            "project_id": project_id,
+                            "orcid": orcid,
+                            "dsid": dsid,
+                            "sample_unique_id": uuid,
+                            "kw_list": kw_list,
+                            "comments": comments,
+                            "ingestor": ingestor,
+                        },
+                        timeout=0,
+                    )
+                    submitted.append({
+                        "file": os.path.basename(file_path),
+                        "flow_run_id": str(flow_run.id),
+                        "dsid": dsid,
+                    })
+            else:
+                dsid, _ = backend.resolve_dsid_for_file(file_path, valid_dsids)
+                flow_run = run_deployment(
+                    "multi-assignment-upload/multi-assignment-upload",
+                    parameters={
+                        "file": file_path,
+                        "sample_uuids": sample_uuids,
+                        "project_id": project_id,
+                        "orcid": orcid,
+                        "instrument_name": instrument_name,
+                        "dsid": dsid,
+                        "kw_list": kw_list,
+                        "comments": comments,
+                        "ingestor": ingestor,
+                    },
+                    timeout=0,
+                )
+                submitted.append({
+                    "file": os.path.basename(file_path),
+                    "flow_run_id": str(flow_run.id),
+                    "dsid": dsid,
+                })
+        except Exception as e:
+            backend.logger.error(f"multi_assignment upload failed for {file_path}: {e}")
+            return jsonify({"error": str(e)}), 500
+
+    return jsonify({"submitted": submitted})
+
+
 if __name__ == "__main__":
     # Flask runs in a daemon thread; tkinter mainloop holds the main thread.
+    port = int(os.environ.get("FLASK_PORT", 5000))
     flask_thread = threading.Thread(
-        target=lambda: app.run(debug=False, port=5000), daemon=True
+        target=lambda: app.run(debug=False, port=port), daemon=True
     )
     flask_thread.start()
-    webbrowser.open("http://localhost:5000")
+    webbrowser.open(f"http://localhost:{port}")
     _tk_root.after(50, _check_browse_queue)
     _tk_root.mainloop()

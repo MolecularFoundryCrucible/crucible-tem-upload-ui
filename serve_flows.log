@@ -1,14 +1,15 @@
 /home/timko/Github_repos/crucible-nirvana-upload-ui/prefect_backend.py:27: UserWarning: Logger 'prefect_backend' attempted to send logs to the API without a flow run id. The API log handler can only send logs within flow run contexts unless the flow run id is manually provided. Set PREFECT_LOGGING_TO_API_WHEN_MISSING_FLOW=ignore to suppress this warning.
   logger.info(f'Connected to Crucible Client with API url: {client.api_url}')
-18:28:31.751 | INFO    | prefect_backend - Connected to Crucible Client with API url: https://crucible.lbl.gov/api/v2
+18:01:46.701 | INFO    | prefect_backend - Connected to Crucible Client with API url: https://crucible.lbl.gov/api/v2
 Your deployments are being served and polling for scheduled runs!
 
 Deployments
-┌─────────────────────────────────────┐
-│ multi-file-upload/multi-file-upload │
-│ session-upload/session-upload       │
-│ upload-dataset/upload-dataset       │
-└─────────────────────────────────────┘
+┌─────────────────────────────────────────────────┐
+│ multi-file-upload/multi-file-upload             │
+│ session-upload/session-upload                   │
+│ upload-dataset/upload-dataset                   │
+│ multi-assignment-upload/multi-assignment-upload │
+└─────────────────────────────────────────────────┘
 
 To trigger any of these deployments, use the following command:
 
@@ -16,39 +17,9 @@ To trigger any of these deployments, use the following command:
 
 You can also trigger your deployments via the Prefect UI: http://127.0.0.1:4200/deployments
 
-18:29:16.037 | INFO    | Flow run 'mysterious-caterpillar' - Downloading flow code from storage at '.'
-/home/timko/Github_repos/crucible-nirvana-upload-ui/prefect_backend.py:27: UserWarning: Logger 'prefect_backend' attempted to send logs to the API without a flow run id. The API log handler can only send logs within flow run contexts unless the flow run id is manually provided. Set PREFECT_LOGGING_TO_API_WHEN_MISSING_FLOW=ignore to suppress this warning.
-  logger.info(f'Connected to Crucible Client with API url: {client.api_url}')
-18:29:16.221 | INFO    | prefect_backend - Connected to Crucible Client with API url: https://crucible.lbl.gov/api/v2
-18:29:16.380 | INFO    | Flow run 'upload-test.txt' - Beginning flow run 'upload-test.txt' for flow 'upload-dataset'
-18:29:16.381 | INFO    | Flow run 'upload-test.txt' - View at http://127.0.0.1:4200/runs/flow-run/d906b17a-5997-493a-9255-37d981d07306
-18:29:17.477 | INFO    | crucible.resources.gcs.upload - Uploading test.txt (0.0 MB) to dataset 0tjdmzht5dsad000t0zhx6rjn4 [parallel, 8 workers]
-18:29:18.585 | INFO    | crucible.resources.gcs.upload - Completing upload for test.txt (upload_id=0tjdmzqkgdv6q000xcrgpnmb2r)
-18:29:18.710 | INFO    | crucible.resources.files - Requesting ingestion for file 0tjdmzr3shzb7000r8gstwkp4m
-18:29:18.893 | INFO    | crucible.resources.ingestion - Waiting for ingestion request to complete...
-18:29:19.983 | INFO    | crucible.resources.ingestion - Current status: not supported
-18:29:19.984 | INFO    | crucible.resources.ingestion - Request completed with status: not supported
-18:29:19.985 | INFO    | Task run 'create_dataset-4a8' - Resumed dataset 0tjdmzht5dsad000t0zhx6rjn4 for test.txt
-18:29:19.987 | INFO    | Task run 'create_dataset-4a8' - Finished in state Completed()
-18:29:19.998 | INFO    | Task run 'link_dataset_to_session-2eb' - Finished in state Completed()
-18:29:20.009 | INFO    | Task run 'link_dataset_and_sample-649' - Finished in state Completed()
-18:29:20.392 | INFO    | Flow run 'upload-test.txt' - Finished in state Completed()
-18:39:19.740 | INFO    | Flow run 'aloof-wolf' - Downloading flow code from storage at '.'
-/home/timko/Github_repos/crucible-nirvana-upload-ui/prefect_backend.py:27: UserWarning: Logger 'prefect_backend' attempted to send logs to the API without a flow run id. The API log handler can only send logs within flow run contexts unless the flow run id is manually provided. Set PREFECT_LOGGING_TO_API_WHEN_MISSING_FLOW=ignore to suppress this warning.
-  logger.info(f'Connected to Crucible Client with API url: {client.api_url}')
-18:39:19.914 | INFO    | prefect_backend - Connected to Crucible Client with API url: https://crucible.lbl.gov/api/v2
-18:39:20.133 | INFO    | Flow run 'upload-test.txt' - Beginning flow run 'upload-test.txt' for flow 'upload-dataset'
-18:39:20.134 | INFO    | Flow run 'upload-test.txt' - View at http://127.0.0.1:4200/runs/flow-run/68a7ce2e-9beb-46e7-880d-62d2931bd4ba
-18:39:21.068 | INFO    | crucible.resources.gcs.upload - Uploading test.txt (0.0 MB) to dataset 0tjdmzht5dsad000t0zhx6rjn4 [parallel, 8 workers]
-18:39:21.206 | INFO    | crucible.resources.gcs.upload - test.txt already exists in dataset 0tjdmzht5dsad000t0zhx6rjn4, skipping upload
-18:39:21.207 | INFO    | crucible.resources.datasets - test.txt already exists in dataset 0tjdmzht5dsad000t0zhx6rjn4, skipping ingestion
-18:39:21.208 | INFO    | Task run 'create_dataset-940' - Resumed dataset 0tjdmzht5dsad000t0zhx6rjn4 for test.txt
-18:39:21.213 | INFO    | Task run 'create_dataset-940' - Finished in state Completed()
-18:39:21.232 | INFO    | Task run 'link_dataset_to_session-b50' - Finished in state Completed()
-18:39:21.371 | INFO    | Task run 'link_dataset_and_sample-d25' - Finished in state Completed()
-18:39:22.140 | INFO    | Flow run 'upload-test.txt' - Finished in state Completed()
-18:53:09.018 | INFO    | prefect.runner - SIGTERM received, initiating graceful shutdown...
 /home/timko/Github_repos/crucible-nirvana-upload-ui/.venv/lib/python3.13/site-packages/prefect/runner/runner.py:558: RuntimeWarning: coroutine 'Runner.astop' was never awaited
   self.stop()
 RuntimeWarning: Enable tracemalloc to get the object allocation traceback
-18:53:09.022 | INFO    | prefect.runner - Pausing all deployments...
+18:02:10.198 | INFO    | prefect.runner - SIGTERM received, initiating graceful shutdown...
+18:02:10.201 | INFO    | prefect.runner - Pausing all deployments...
+18:02:10.314 | INFO    | prefect.runner - All deployments have been paused!
