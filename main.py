@@ -493,7 +493,7 @@ def parse_files():
         try:
             samples = parser(path)
         except Exception as e:
-            backend.logger.error(f"Failed to parse {path}: {e}")
+            backend.logger.error(f"Failed to parse {path}: {repr(e)}")
             return jsonify({"error": f"Could not read {os.path.basename(path)}: {e}"}), 500
         results.append({
             "path": path,
@@ -516,7 +516,7 @@ def resolve_holders():
     try:
         files = backend.resolve_holders(instrument, holder_uuids, layout_name)
     except Exception as e:
-        backend.logger.error(f"resolve_holders failed: {e}")
+        backend.logger.error(f"resolve_holders failed: {repr(e)}")
         return jsonify({"error": str(e)}), 500
     return jsonify({"files": files})
 
@@ -598,7 +598,7 @@ def multi_assignment_upload():
                     "dsid": dsid,
                 })
         except Exception as e:
-            backend.logger.error(f"multi_assignment upload failed for {file_path}: {e}")
+            backend.logger.error(f"multi_assignment upload failed for {file_path}: {repr(e)}")
             return jsonify({"error": str(e)}), 500
 
     return jsonify({"submitted": submitted})
