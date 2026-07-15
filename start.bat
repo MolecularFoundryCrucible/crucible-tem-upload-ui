@@ -21,3 +21,5 @@ cmd /c uv run python main.py
 
 :: Clean up on exit (always runs after main.py stops)
 taskkill /f /im prefect.exe 2>nul
+wmic process where "commandline like '%%serve_flows%%'" delete 2>nul
+wmic process where "commandline like '%%prefect server%%'" delete 2>nul
