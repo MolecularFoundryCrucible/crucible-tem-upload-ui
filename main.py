@@ -15,8 +15,8 @@ from flask import Flask, jsonify, render_template, request
 
 import crucible
 import prefect_backend as backend
-import instrument_plugins as plugins
 import instrument_conf as conf
+from instruments import registry
 from ai_services import voice_bp, extract_keywords
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(funcName)s: %(message)s")
@@ -78,26 +78,30 @@ def _drain(q: queue.Queue):
 def index():
     return render_template("index.html",
                            print_barcode_enabled=conf.PRINT_BARCODE_ENABLED,
-                           crucible_version=crucible.__version__)
+                           crucible_version=crucible.__version__,
+                           instruments=registry.INSTRUMENTS,
+                           panel_templates=registry.PANEL_TEMPLATES,
+                           holder_layouts=registry.INSTRUMENT_HOLDER_LAYOUTS)
 
 
 @app.get("/api/instruments")
 def get_instruments():
     return jsonify({
-        "instruments": conf.INSTRUMENTS,
+        "instruments": registry.INSTRUMENTS,
         "default": conf.DEFAULT_INSTRUMENT_NAME,
         "is_session": conf.IS_SESSION,
-        "ui_modes": getattr(conf, 'INSTRUMENT_UI_MODE', {}),
-        "holder_layout": getattr(conf, 'INSTRUMENT_HOLDER_LAYOUT', {}),
-        "ingestors": getattr(conf, 'AVAILABLE_INGESTORS', []),
-        "default_ingestors": getattr(conf, 'INSTRUMENT_INGESTORS', {}),
+        "ui_modes": registry.INSTRUMENT_UI_MODE,
+        "holder_layouts": registry.INSTRUMENT_HOLDER_LAYOUTS,
+        "default_holder_layouts": registry.DEFAULT_HOLDER_LAYOUTS,
+        "default_ingestors": registry.INSTRUMENT_INGESTORS,
     })
 
 
 @app.get("/api/ingestors")
 def get_ingestors():
     try:
-        return jsonify({"ingestors": backend.list_ingestors()})
+        ingestors = backend.list_ingestors()
+        return jsonify({"ingestors": ingestors})
     except Exception as e:
         backend.logger.warning(f"list_ingestors API call failed: {e}")
         return jsonify({"ingestors": []})
@@ -129,11 +133,7 @@ CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "instrume
 EDITABLE_FIELDS = {
     "DEFAULT_BROWSE_DIR": "str",
     "IS_SESSION": "bool",
-    "INSTRUMENTS": "list_str",
     "DEFAULT_INSTRUMENT_NAME": "str",
-    "INSTRUMENT_FLOWS": "dict_str",
-    "POST_PROCESSING_REQUESTS": "dict_list",
-    "INSTRUMENT_INGESTORS": "dict_str",
     "CHAIN_POST_PROCESSING": "bool",
     "PRINT_BARCODE_ENABLED": "bool",
     "MULTI_ASSIGNMENT_ONE_PER_SAMPLE": "bool",
@@ -234,13 +234,10 @@ def save_config():
     if not values:
         return jsonify({"error": "No settings provided"}), 400
 
-    # Cross-field check: default instrument must be one of the listed instruments.
-    instruments = values.get("INSTRUMENTS", conf.INSTRUMENTS)
+    # Cross-field check: default instrument must be known to the registry.
     default = values.get("DEFAULT_INSTRUMENT_NAME", conf.DEFAULT_INSTRUMENT_NAME)
-    if not instruments:
-        return jsonify({"error": "INSTRUMENTS cannot be empty"}), 400
-    if default and default not in instruments:
-        return jsonify({"error": f"Default instrument '{default}' is not in the instruments list"}), 400
+    if default and default not in registry.INSTRUMENTS:
+        return jsonify({"error": f"Default instrument '{default}' is not a registered instrument"}), 400
 
     try:
         _write_config(values)
@@ -375,7 +372,7 @@ def do_upload():
     if conf.IS_SESSION:
         # Session mode — existing behavior. Create parent session record sync so
         # the UI can show the Crucible link + QR before the flow runs.
-        deployment_name = conf.INSTRUMENT_FLOWS.get(instrument_name)
+        deployment_name = registry.INSTRUMENT_FLOWS.get(instrument_name)
         if not deployment_name:
             return jsonify({"error": f"No upload flow configured for instrument '{instrument_name}'"}), 400
         try:
@@ -486,7 +483,7 @@ def parse_files():
     paths = data.get("files") or []
     if not instrument or not paths:
         return jsonify({"error": "instrument and files required"}), 400
-    parser = plugins.FILE_PARSERS.get(instrument)
+    parser = registry.FILE_PARSERS.get(instrument)
     if parser is None:
         return jsonify({"error": f"No file parser registered for instrument '{instrument}'"}), 400
     results = []
@@ -511,12 +508,13 @@ def resolve_holders():
     data = request.json or {}
     instrument = (data.get("instrument") or "").strip()
     holder_uuids = [u.strip() for u in (data.get("holder_uuids") or [])]
+    layout_name = (data.get("layout_name") or "").strip()
     if not instrument:
         return jsonify({"error": "instrument required"}), 400
     if not any(holder_uuids):
         return jsonify({"error": "at least one holder UUID required"}), 400
     try:
-        files = backend.resolve_holders(instrument, holder_uuids)
+        files = backend.resolve_holders(instrument, holder_uuids, layout_name)
     except Exception as e:
         backend.logger.error(f"resolve_holders failed: {e}")
         return jsonify({"error": str(e)}), 500

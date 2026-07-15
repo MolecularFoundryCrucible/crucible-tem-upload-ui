@@ -400,17 +400,11 @@ def list_ingestors() -> list[str]:
     return client.ingestions.list_ingestors()
 
 
-def resolve_holders(instrument: str, holder_uuids: list[str]) -> list[dict]:
-    """Fetch child samples for each holder UUID and return grid-ready data.
-
-    Layout (number of holders, slots per holder, labels) comes from
-    INSTRUMENT_HOLDER_LAYOUT in instrument_conf.  When Crucible gains a layout
-    metadata field on holder samples, read it via
-        client.samples.get(uuid, include_metadata=True)['scientific_metadata']
-    and use these config values as a fallback.
-    """
-    from instrument_conf import INSTRUMENT_HOLDER_LAYOUT
-    layout = INSTRUMENT_HOLDER_LAYOUT.get(instrument, [])
+def resolve_holders(instrument: str, holder_uuids: list[str], layout_name: str = '') -> list[dict]:
+    """Fetch child samples for each holder UUID and return grid-ready data."""
+    from instruments.registry import INSTRUMENT_HOLDER_LAYOUTS
+    layouts = INSTRUMENT_HOLDER_LAYOUTS.get(instrument, {})
+    layout = layouts.get(layout_name) or next(iter(layouts.values()), [])
     results = []
     for i, uuid in enumerate(holder_uuids):
         if not uuid:
@@ -468,7 +462,8 @@ def upload_dataset(files: list,
                    kw_list: list[str] = [],
                    comments: str | None = None,
                    ingestor: str | None = None) -> str:
-    from instrument_conf import POST_PROCESSING_REQUESTS, CHAIN_POST_PROCESSING
+    from instruments.registry import POST_PROCESSING_REQUESTS
+    from instrument_conf import CHAIN_POST_PROCESSING
 
     new_ds_dsid = create_dataset(files=files,
                                  instrument_name=instrument_name,
@@ -647,7 +642,8 @@ def multi_assignment_upload(file: str,
                    kw_list: list[str] = [],
                    comments: str | None = None,
                    ingestor: str | None = None) -> str:
-    from instrument_conf import POST_PROCESSING_REQUESTS, CHAIN_POST_PROCESSING
+    from instruments.registry import POST_PROCESSING_REQUESTS
+    from instrument_conf import CHAIN_POST_PROCESSING
     logger = get_run_logger()
 
     new_dsid = create_dataset(files=[file],

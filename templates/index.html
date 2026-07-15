@@ -144,38 +144,12 @@
           </div>
         </div>
 
-        <!-- Multi-assignment panel (shown only in multi_assignment mode) -->
-        <div id="ma-section" class="card h-100 shadow-sm d-none" style="border-top-color: #198754;">
-          <div class="card-body d-flex flex-column">
-            <div class="d-flex align-items-center justify-content-between mb-2">
-              <h5 class="card-title text-success mb-0">Sample Assignments</h5>
-              <span id="ma-parse-spinner" class="spinner-border spinner-border-sm text-secondary d-none" role="status"></span>
-            </div>
-
-            <!-- Source toggle -->
-            <div class="btn-group btn-group-sm mb-3" role="group" id="ma-source-toggle">
-              <input type="radio" class="btn-check" name="ma-source" id="ma-src-file" value="file" checked autocomplete="off"
-                     onchange="onMaSourceChange()">
-              <label class="btn btn-outline-secondary" for="ma-src-file">From file</label>
-              <input type="radio" class="btn-check" name="ma-source" id="ma-src-holders" value="holders" autocomplete="off"
-                     onchange="onMaSourceChange()">
-              <label class="btn btn-outline-secondary" for="ma-src-holders">From holders</label>
-            </div>
-
-            <!-- Holder UUID fields (shown when "From holders" is active) -->
-            <div id="ma-holder-fields" class="d-none mb-3">
-              <div id="ma-holder-inputs"></div>
-              <button class="btn btn-outline-success btn-sm mt-2" type="button" onclick="resolveHolders()">
-                <span id="spinner-ma-resolve" class="spinner-border spinner-border-sm d-none me-1" role="status"></span>
-                Resolve
-              </button>
-            </div>
-
-            <p id="ma-empty-msg" class="text-muted small">Browse and select .h5 files above to load assignments.</p>
-            <ul class="nav nav-tabs d-none" id="ma-tabs" role="tablist"></ul>
-            <div class="tab-content pt-2 flex-grow-1 overflow-auto" id="ma-tab-content"></div>
-          </div>
+        <!-- Per-instrument panels (each rendered server-side; JS shows the active one) -->
+        {% for instrument_name, tmpl in panel_templates.items() %}
+        <div id="panel-{{ instrument_name }}" class="instrument-panel h-100 d-none">
+          {% include tmpl %}
         </div>
+        {% endfor %}
 
       </div>
     </div>
@@ -358,36 +332,13 @@
           <label class="form-label fw-semibold">Default browse directory</label>
           <input id="cfg-browse-dir" type="text" class="form-control mb-3" placeholder="(none) — e.g. /data/sessions" />
 
-          <!-- Instruments -->
-          <label class="form-label fw-semibold">Instruments</label>
-          <div id="cfg-instruments" class="d-flex flex-wrap gap-1 mb-2"></div>
-          <div class="input-group input-group-sm mb-3" style="max-width: 320px;">
-            <input id="cfg-instrument-input" type="text" class="form-control" placeholder="Add instrument..."
-                   onkeydown="if(event.key==='Enter'){event.preventDefault(); addInstrumentChip()}" />
-            <button class="btn btn-outline-secondary" type="button" onclick="addInstrumentChip()">+</button>
-          </div>
-
           <!-- Default instrument -->
           <label class="form-label fw-semibold">Default instrument</label>
-          <select id="cfg-default-instrument" class="form-select mb-3"></select>
-
-          <!-- Instrument flows -->
-          <label class="form-label fw-semibold">Instrument flows
-            <span class="text-muted small fw-normal">— instrument → Prefect deployment (session mode)</span>
-          </label>
-          <div id="cfg-flows" class="mb-3"></div>
-
-          <!-- Post-processing requests -->
-          <label class="form-label fw-semibold">Post-processing requests
-            <span class="text-muted small fw-normal">— instrument → comma-separated request names</span>
-          </label>
-          <div id="cfg-postproc" class="mb-3"></div>
-
-          <!-- Default ingestors -->
-          <label class="form-label fw-semibold">Default ingestors
-            <span class="text-muted small fw-normal">— instrument → ingestor class name</span>
-          </label>
-          <div id="cfg-ingestors" class="mb-3"></div>
+          <select id="cfg-default-instrument" class="form-select mb-3">
+            {% for instr in instruments %}
+            <option value="{{ instr }}">{{ instr }}</option>
+            {% endfor %}
+          </select>
 
           <!-- Acceptable file types -->
           <label class="form-label fw-semibold">Acceptable file types</label>
@@ -416,8 +367,7 @@
           </div>
 
           <div class="alert alert-warning small mb-0 mt-3">
-            Note: <code>POST_PROCESSING_REQUESTS</code>, <code>CHAIN_POST_PROCESSING</code>, and
-            <code>ACCEPTABLE_FILE_TYPES</code> are read by the Prefect worker process — restart the worker for those to take effect.
+            Note: <code>CHAIN_POST_PROCESSING</code> and <code>ACCEPTABLE_FILE_TYPES</code> are read by the Prefect worker process — restart the worker for those to take effect.
           </div>
 
           <div id="cfg-error" class="alert alert-danger d-none mt-3 mb-0"></div>
@@ -444,7 +394,9 @@
       isSession: true,
       selectedPaths: [],
       uiModes: {},
-      holderLayout: {},
+      holderLayouts: {},
+      defaultHolderLayouts: {},
+      activeHolderLayout: {},
       defaultIngestors: {},
     };
 
@@ -467,29 +419,19 @@
 
       state.isSession = !!data.is_session;
       state.uiModes = data.ui_modes || {};
-      state.holderLayout = data.holder_layout || {};
+      state.holderLayouts = data.holder_layouts || {};
+      state.defaultHolderLayouts = data.default_holder_layouts || {};
       state.defaultIngestors = data.default_ingestors || {};
       applyUploadModeUI();
 
-      // Populate ingestor dropdown from config list, then merge API list
+      // Populate ingestor dropdown from server list
       const ingestorSel = document.getElementById("ingestor");
-      const knownIngestors = new Set(data.ingestors || []);
-      knownIngestors.forEach(name => {
-        const opt = document.createElement("option");
-        opt.value = name;
-        opt.textContent = name;
-        ingestorSel.appendChild(opt);
-      });
-      // Fetch API list in background; add any new names not in the config list
       fetch("/api/ingestors").then(r => r.json()).then(d => {
         (d.ingestors || []).forEach(name => {
-          if (!knownIngestors.has(name)) {
-            const opt = document.createElement("option");
-            opt.value = name;
-            opt.textContent = name + " ★";  // mark as newly discovered
-            ingestorSel.appendChild(opt);
-            knownIngestors.add(name);
-          }
+          const opt = document.createElement("option");
+          opt.value = name;
+          opt.textContent = name;
+          ingestorSel.appendChild(opt);
         });
         _applyDefaultIngestor(document.getElementById("instrument").value);
       }).catch(() => {});
@@ -972,16 +914,33 @@
       const instrument = document.getElementById("instrument").value;
       _applyDefaultIngestor(instrument);
       const isMultiAssignment = state.uiModes[instrument] === 'multi_assignment';
+
+      // Hide all per-instrument panels
+      document.querySelectorAll('.instrument-panel').forEach(el => el.classList.add('d-none'));
+
       document.getElementById("sample-info-card").classList.toggle("d-none", isMultiAssignment);
-      document.getElementById("ma-section").classList.toggle("d-none", !isMultiAssignment);
       document.getElementById("btn-upload").classList.toggle("d-none", isMultiAssignment);
       document.getElementById("btn-ma-upload").classList.toggle("d-none", !isMultiAssignment);
+
       if (!isMultiAssignment) {
         _clearNirvanaUI();
         return;
       }
-      // Reset source toggle to "From file" and rebuild holder fields for this instrument
-      const hasHolderLayout = !!(state.holderLayout[instrument] && state.holderLayout[instrument].length);
+
+      // Show this instrument's panel
+      const panel = document.getElementById(`panel-${instrument}`);
+      if (panel) panel.classList.remove('d-none');
+
+      // Init active holder layout for this instrument
+      if (!state.activeHolderLayout[instrument]) {
+        const layouts = state.holderLayouts[instrument] || {};
+        state.activeHolderLayout[instrument] =
+          state.defaultHolderLayouts[instrument] || Object.keys(layouts)[0] || '';
+      }
+      const layoutSel = document.getElementById("ma-holder-layout");
+      if (layoutSel) layoutSel.value = state.activeHolderLayout[instrument];
+
+      const hasHolderLayout = !!(state.holderLayouts[instrument] && Object.keys(state.holderLayouts[instrument]).length);
       document.getElementById("ma-source-toggle").classList.toggle("d-none", !hasHolderLayout);
       document.getElementById("ma-src-file").checked = true;
       _renderHolderFields(instrument);
@@ -1007,11 +966,12 @@
     }
 
     function _renderHolderFields(instrument) {
-      const holders = (state.holderLayout[instrument] || []);
+      const activeLayout = state.activeHolderLayout[instrument] || '';
+      const layouts = state.holderLayouts[instrument] || {};
+      const holders = layouts[activeLayout] || [];
       const container = document.getElementById("ma-holder-inputs");
       container.innerHTML = "";
       if (!holders.length) {
-        // No config for this instrument — show a single generic field
         container.innerHTML = `<input type="text" class="form-control form-control-sm mb-1 ma-holder-uuid"
           placeholder="Holder UUID" />`;
         return;
@@ -1024,6 +984,14 @@
           <input type="text" class="form-control ma-holder-uuid" placeholder="UUID" />`;
         container.appendChild(row);
       });
+    }
+
+    function onHolderLayoutChange() {
+      const instrument = document.getElementById("instrument").value;
+      const layoutSel = document.getElementById("ma-holder-layout");
+      if (layoutSel) state.activeHolderLayout[instrument] = layoutSel.value;
+      _renderHolderFields(instrument);
+      _clearNirvanaUI();
     }
 
     async function resolveHolders() {
@@ -1039,7 +1007,7 @@
         const res = await fetch("/api/resolve_holders", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ instrument, holder_uuids: uuids }),
+          body: JSON.stringify({ instrument, holder_uuids: uuids, layout_name: state.activeHolderLayout[instrument] || '' }),
         });
         const data = await res.json();
         if (!res.ok) { showStatus(data.error || "Failed to resolve holders.", "danger"); return; }
@@ -1313,7 +1281,7 @@
     // Instrument config editor
     // -------------------------------------------------------------------------
     let configModal = null;
-    const cfgState = { instruments: [], fileTypes: [] };
+    const cfgState = { fileTypes: [] };
 
     async function openConfig() {
       document.getElementById("cfg-error").classList.add("d-none");
@@ -1328,20 +1296,11 @@
         document.getElementById("cfg-print-barcode").checked = !!c.PRINT_BARCODE_ENABLED;
         document.getElementById("cfg-ma-one-per-sample").checked = !!c.MULTI_ASSIGNMENT_ONE_PER_SAMPLE;
 
-        cfgState.instruments = [...(c.INSTRUMENTS || [])];
         cfgState.fileTypes = [...(c.ACCEPTABLE_FILE_TYPES || [])];
-        renderInstrumentChips();
         renderFileTypeChips();
-        updateDefaultInstrumentOptions(c.DEFAULT_INSTRUMENT_NAME || "");
 
-        document.getElementById("cfg-flows").innerHTML = "";
-        Object.entries(c.INSTRUMENT_FLOWS || {}).forEach(([k, v]) => addFlowRow(k, v));
-
-        document.getElementById("cfg-postproc").innerHTML = "";
-        Object.entries(c.POST_PROCESSING_REQUESTS || {}).forEach(([k, v]) => addPostProcRow(k, (v || []).join(", ")));
-
-        document.getElementById("cfg-ingestors").innerHTML = "";
-        Object.entries(c.INSTRUMENT_INGESTORS || {}).forEach(([k, v]) => addIngestorRow(k, v));
+        const defSel = document.getElementById("cfg-default-instrument");
+        if (c.DEFAULT_INSTRUMENT_NAME) defSel.value = c.DEFAULT_INSTRUMENT_NAME;
 
         if (!configModal) configModal = new bootstrap.Modal(document.getElementById("config-modal"));
         configModal.show();
@@ -1363,25 +1322,6 @@
       return span;
     }
 
-    function renderInstrumentChips() {
-      const box = document.getElementById("cfg-instruments");
-      box.innerHTML = "";
-      cfgState.instruments.forEach((name, i) => {
-        box.appendChild(chip(name, () => { cfgState.instruments.splice(i, 1); renderInstrumentChips(); updateDefaultInstrumentOptions(); }));
-      });
-    }
-
-    function addInstrumentChip() {
-      const input = document.getElementById("cfg-instrument-input");
-      const val = input.value.trim();
-      if (val && !cfgState.instruments.includes(val)) {
-        cfgState.instruments.push(val);
-        renderInstrumentChips();
-        updateDefaultInstrumentOptions();
-      }
-      input.value = "";
-    }
-
     function renderFileTypeChips() {
       const box = document.getElementById("cfg-filetypes");
       box.innerHTML = "";
@@ -1401,104 +1341,14 @@
       input.value = "";
     }
 
-    function updateDefaultInstrumentOptions(preferred) {
-      const sel = document.getElementById("cfg-default-instrument");
-      const current = preferred !== undefined ? preferred : sel.value;
-      sel.innerHTML = "";
-      cfgState.instruments.forEach(name => {
-        const opt = document.createElement("option");
-        opt.value = name;
-        opt.textContent = name;
-        sel.appendChild(opt);
-      });
-      if (cfgState.instruments.includes(current)) sel.value = current;
-    }
-
-    function dictRow(containerId, keyVal, valVal, valPlaceholder) {
-      const row = document.createElement("div");
-      row.className = "input-group input-group-sm mb-1";
-      row.innerHTML = `
-        <input type="text" class="form-control cfg-key" placeholder="instrument" style="max-width: 180px;" />
-        <input type="text" class="form-control cfg-val" />
-        <button class="btn btn-outline-danger" type="button">&times;</button>`;
-      row.querySelector(".cfg-key").value = keyVal || "";
-      const v = row.querySelector(".cfg-val");
-      v.value = valVal || "";
-      v.placeholder = valPlaceholder;
-      row.querySelector("button").onclick = () => row.remove();
-      document.getElementById(containerId).appendChild(row);
-    }
-
-    function addFlowRow(key, val) { dictRow("cfg-flows", key, val, "flow-name/deployment-name"); }
-    function addPostProcRow(key, val) { dictRow("cfg-postproc", key, val, "request_a, request_b"); }
-    function addIngestorRow(key, val) {
-      const row = document.createElement("div");
-      row.className = "input-group input-group-sm mb-1";
-
-      // Instrument select (key)
-      const instrSel = document.createElement("select");
-      instrSel.className = "form-select cfg-key";
-      instrSel.style.maxWidth = "180px";
-      cfgState.instruments.forEach(name => {
-        const opt = document.createElement("option");
-        opt.value = name; opt.textContent = name;
-        instrSel.appendChild(opt);
-      });
-      if (key) instrSel.value = key;
-
-      // Ingestor select (val) — mirror options from main #ingestor dropdown
-      const ingestorSel = document.createElement("select");
-      ingestorSel.className = "form-select cfg-val";
-      const blankOpt = document.createElement("option");
-      blankOpt.value = ""; blankOpt.textContent = "(server default)";
-      ingestorSel.appendChild(blankOpt);
-      document.getElementById("ingestor").querySelectorAll("option").forEach(o => {
-        if (!o.value) return;
-        const opt = document.createElement("option");
-        opt.value = o.value; opt.textContent = o.value.replace(" ★", "");
-        ingestorSel.appendChild(opt);
-      });
-      if (val) ingestorSel.value = val;
-
-      const removeBtn = document.createElement("button");
-      removeBtn.className = "btn btn-outline-danger"; removeBtn.type = "button";
-      removeBtn.textContent = "×"; removeBtn.onclick = () => row.remove();
-
-      row.appendChild(instrSel);
-      row.appendChild(ingestorSel);
-      row.appendChild(removeBtn);
-      document.getElementById("cfg-ingestors").appendChild(row);
-    }
-
-    function collectDict(containerId, asList) {
-      const out = {};
-      document.querySelectorAll(`#${containerId} .input-group`).forEach(row => {
-        const key = row.querySelector(".cfg-key").value.trim();
-        const raw = row.querySelector(".cfg-val").value.trim();
-        if (!key) return;
-        out[key] = asList ? raw.split(",").map(s => s.trim()).filter(Boolean) : raw;
-      });
-      return out;
-    }
-
     async function saveConfig() {
       const errBox = document.getElementById("cfg-error");
       errBox.classList.add("d-none");
 
-      if (!cfgState.instruments.length) {
-        errBox.textContent = "At least one instrument is required.";
-        errBox.classList.remove("d-none");
-        return;
-      }
-
       const payload = {
         IS_SESSION: document.getElementById("cfg-is-session").value === "true",
         DEFAULT_BROWSE_DIR: document.getElementById("cfg-browse-dir").value.trim(),
-        INSTRUMENTS: cfgState.instruments,
         DEFAULT_INSTRUMENT_NAME: document.getElementById("cfg-default-instrument").value,
-        INSTRUMENT_FLOWS: collectDict("cfg-flows", false),
-        POST_PROCESSING_REQUESTS: collectDict("cfg-postproc", true),
-        INSTRUMENT_INGESTORS: collectDict("cfg-ingestors", false),
         ACCEPTABLE_FILE_TYPES: cfgState.fileTypes,
         CHAIN_POST_PROCESSING: document.getElementById("cfg-chain-postproc").checked,
         PRINT_BARCODE_ENABLED: document.getElementById("cfg-print-barcode").checked,
