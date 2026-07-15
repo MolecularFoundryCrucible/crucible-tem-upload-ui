@@ -135,9 +135,14 @@ def lookup_sample(sample_name: str | None = None, sample_unique_id: str | None =
         return {}
 
 
-def create_sample(sample_name: str, owner_orcid: str, project_id: str,
-                   unique_id: str | None = None, description: str | None = None,
-                   timestamp: str | None = None, sample_type: str | None = None) -> dict:
+def create_sample(sample_name: str,
+                  owner_orcid: str,
+                  project_id: str,
+                  unique_id: str | None = None,
+                  description: str | None = None,
+                  timestamp: str | None = None,
+                  sample_type: str | None = None) -> dict:
+    
     kwargs = {k: v for k, v in {
         "unique_id": unique_id,
         "sample_name": sample_name,
@@ -148,13 +153,20 @@ def create_sample(sample_name: str, owner_orcid: str, project_id: str,
         "owner_user_id": owner_orcid,
     }.items() if v is not None}
 
-    result = client.samples.create(**kwargs)
+    try:
+        result = client.samples.create(**kwargs)
+    except Exception as error:
+        results = client.samples.list(sample_name = sample_name, project_id = project_id)
+        if len(results) > 0:
+            result = results[-1]
+        else:
+            result = None
+            raise Exception(f'Failed to create sample with {error=}. No samples matching name and project found.') 
+        
     logger.info(f"Created sample: {result}")
-    #created = result.get('created_record', result)
-    created = result
     return {
-        'unique_id': created.get('unique_id', ''),
-        'sample_name': created.get('sample_name', sample_name),
+        'unique_id': result.get('unique_id', ''),
+        'sample_name': result.get('sample_name', sample_name),
     }
 
 
@@ -174,13 +186,12 @@ def get_emi_file_name(serfile: str) -> str:
     no_rep = re.sub('_[0-9]*$', '', no_ext)
     return f"{no_rep}.emi"
 
-def check_session_depth(session_folder_path: str, min_depth: int = 3) -> None:
+def check_session_depth(session_folder_path: str, min_depth: int = 1) -> None:
     parts = Path(session_folder_path).resolve().parts
-    if len(parts) - 1 <min_depth:  # subtract 1 to not count the root
+    if len(parts) - 1 < min_depth:  # subtract 1 to not count the root
         raise ValueError(f"Session folder is too close to the filesystem root. Please select a folder at least {min_depth} levels deep.")
     else:
         return
-
 
 def check_existing_sessions(session_folder_path: str, orcid: str, project_id: str,
                             instrument_name: str) -> list[dict]:
