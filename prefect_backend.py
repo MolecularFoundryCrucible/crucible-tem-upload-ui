@@ -408,7 +408,14 @@ def link_dataset_and_sample(new_ds_dsid: str, sample_unique_id: str | list[str] 
     return len(uuids)
 
 def list_ingestors() -> list[str]:
-    return client.ingestions.list_ingestors()
+    raw = client.ingestions.list_ingestors() or []
+    result = []
+    for item in raw:
+        for name in str(item).split(','):
+            name = name.strip()
+            if name:
+                result.append(name)
+    return result
 
 
 def resolve_holders(instrument: str, holder_uuids: list[str], layout_name: str = '') -> list[dict]:
