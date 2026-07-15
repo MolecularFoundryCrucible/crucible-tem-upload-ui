@@ -1,10 +1,10 @@
 import os
 HOME = os.environ.get('HOME')
 
-DEFAULT_BROWSE_DIR = f'{HOME}/Documents'
+DEFAULT_BROWSE_DIR = '/home/timko/Documents'
 # True  = pick a folder; create parent session dataset + one child dataset per file inside
 # False = pick one or more files; each becomes its own standalone dataset (or insitu, per instrument)
-IS_SESSION = True
+IS_SESSION = False
 INSTRUMENTS = ['titanx', 'themis', 'team1', 'team05', 'spectre', 'insitu_pl', 'spinbot']
 DEFAULT_INSTRUMENT_NAME = 'titanx'
 
