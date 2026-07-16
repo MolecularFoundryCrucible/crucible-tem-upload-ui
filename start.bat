@@ -14,6 +14,7 @@ for %%A in (%*) do (
 )
 
 set PREFECT_API_URL=http://127.0.0.1:4200/api
+set PREFECT_API_DATABASE_TIMEOUT=300
 
 :: Start Prefect server in the background
 start /b uv run prefect server start

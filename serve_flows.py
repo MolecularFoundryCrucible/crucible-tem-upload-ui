@@ -6,7 +6,6 @@ Usage:
     python serve_flows.py
 """
 import os
-os.environ['PREFECT_API_DATABASE_TIMEOUT'] = '30.0'
 os.environ['PREFECT_LOGGING_EXTRA_LOGGERS'] = "prefect_backend"
 from prefect import serve
 from prefect_backend import run_shell, multi_file_upload, session_upload, upload_dataset, multi_assignment_upload
