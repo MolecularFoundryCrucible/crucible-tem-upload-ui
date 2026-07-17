@@ -1,9 +1,0 @@
-NAME = 'spinbot'
-INGESTOR = ''
-UI_MODE = 'standard'
-HOLDER_LAYOUTS = {}
-DEFAULT_HOLDER_LAYOUT = ''
-FLOW = None
-POST_PROCESSING = []
-PANEL_TEMPLATE = None
-FILE_PARSER = None

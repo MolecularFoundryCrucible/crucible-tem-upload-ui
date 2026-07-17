@@ -1,9 +1,0 @@
-NAME = 'insitu_pl'
-INGESTOR = ''
-UI_MODE = 'standard'
-HOLDER_LAYOUTS = {}
-DEFAULT_HOLDER_LAYOUT = ''
-FLOW = None
-POST_PROCESSING = ['insitu_aggregation']
-PANEL_TEMPLATE = None
-FILE_PARSER = None
