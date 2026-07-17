@@ -1,4 +1,13 @@
 #!/bin/bash
+
+# Parse optional --port=XXXX argument (default 5000)
+FLASK_PORT=5000
+for arg in "$@"; do
+  case $arg in
+    --port=*) FLASK_PORT="${arg#--port=}" ;;
+  esac
+done
+export FLASK_PORT
 export PREFECT_API_URL="http://127.0.0.1:4200/api"
 
 # Kill the whole process group on Ctrl+C / exit so Prefect server,

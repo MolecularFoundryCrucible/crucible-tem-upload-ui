@@ -1,0 +1,44 @@
+<div class="card h-100 shadow-sm" style="border-top-color: #198754;">
+  <div class="card-body d-flex flex-column">
+    <div class="d-flex align-items-center justify-content-between mb-2">
+      <h5 class="card-title text-success mb-0">Sample Assignments</h5>
+      <span id="ma-parse-spinner" class="spinner-border spinner-border-sm text-secondary d-none" role="status"></span>
+    </div>
+
+    <!-- Source toggle -->
+    <div class="btn-group btn-group-sm mb-3" role="group" id="ma-source-toggle">
+      <input type="radio" class="btn-check" name="ma-source" id="ma-src-file" value="file" checked autocomplete="off"
+             onchange="onMaSourceChange()">
+      <label class="btn btn-outline-secondary" for="ma-src-file">From file</label>
+      <input type="radio" class="btn-check" name="ma-source" id="ma-src-holders" value="holders" autocomplete="off"
+             onchange="onMaSourceChange()">
+      <label class="btn btn-outline-secondary" for="ma-src-holders">From holders</label>
+    </div>
+
+    <!-- Holder UUID fields (shown when "From holders" is active) -->
+    <div id="ma-holder-fields" class="d-none mb-3">
+      <!-- Layout selector (shown only when instrument has multiple layouts) -->
+      {% set instr_layouts = holder_layouts.get(instrument_name, {}) %}
+      {% if instr_layouts|length > 1 %}
+      <div class="d-flex align-items-center gap-2 mb-2">
+        <label class="form-label mb-0 small fw-semibold">Layout</label>
+        <select id="ma-holder-layout" class="form-select form-select-sm" style="max-width: 200px;"
+                onchange="onHolderLayoutChange()">
+          {% for layout_name in instr_layouts.keys() %}
+          <option value="{{ layout_name }}">{{ layout_name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      {% endif %}
+      <div id="ma-holder-inputs"></div>
+      <button class="btn btn-outline-success btn-sm mt-2" type="button" onclick="resolveHolders()">
+        <span id="spinner-ma-resolve" class="spinner-border spinner-border-sm d-none me-1" role="status"></span>
+        Resolve
+      </button>
+    </div>
+
+    <p id="ma-empty-msg" class="text-muted small">Browse and select .h5 files above to load assignments.</p>
+    <ul class="nav nav-tabs d-none" id="ma-tabs" role="tablist"></ul>
+    <div class="tab-content pt-2 flex-grow-1 overflow-auto" id="ma-tab-content"></div>
+  </div>
+</div>

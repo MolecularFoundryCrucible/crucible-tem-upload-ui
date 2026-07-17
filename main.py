@@ -13,8 +13,10 @@ from tkinter import filedialog
 
 from flask import Flask, jsonify, render_template, request
 
+import crucible
 import prefect_backend as backend
 import instrument_conf as conf
+from instruments import registry
 from ai_services import voice_bp, extract_keywords
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(funcName)s: %(message)s")
@@ -74,16 +76,35 @@ def _drain(q: queue.Queue):
 
 @app.get("/")
 def index():
-    return render_template("index.html", print_barcode_enabled=conf.PRINT_BARCODE_ENABLED)
+    return render_template("index.html",
+                           print_barcode_enabled=conf.PRINT_BARCODE_ENABLED,
+                           crucible_version=crucible.__version__,
+                           instruments=registry.INSTRUMENTS,
+                           panel_templates=registry.PANEL_TEMPLATES,
+                           holder_layouts=registry.INSTRUMENT_HOLDER_LAYOUTS)
 
 
 @app.get("/api/instruments")
 def get_instruments():
     return jsonify({
-        "instruments": conf.INSTRUMENTS,
+        "instruments": registry.INSTRUMENTS,
         "default": conf.DEFAULT_INSTRUMENT_NAME,
         "is_session": conf.IS_SESSION,
+        "ui_modes": registry.INSTRUMENT_UI_MODE,
+        "holder_layouts": registry.INSTRUMENT_HOLDER_LAYOUTS,
+        "default_holder_layouts": registry.DEFAULT_HOLDER_LAYOUTS,
+        "default_ingestors": registry.INSTRUMENT_INGESTORS,
     })
+
+
+@app.get("/api/ingestors")
+def get_ingestors():
+    try:
+        ingestors = backend.list_ingestors()
+        return jsonify({"ingestors": ingestors})
+    except Exception as e:
+        backend.logger.warning(f"list_ingestors API call failed: {e}")
+        return jsonify({"ingestors": []})
 
 
 @app.get("/api/browse")
@@ -112,10 +133,7 @@ CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "instrume
 EDITABLE_FIELDS = {
     "DEFAULT_BROWSE_DIR": "str",
     "IS_SESSION": "bool",
-    "INSTRUMENTS": "list_str",
     "DEFAULT_INSTRUMENT_NAME": "str",
-    "INSTRUMENT_FLOWS": "dict_str",
-    "POST_PROCESSING_REQUESTS": "dict_list",
     "CHAIN_POST_PROCESSING": "bool",
     "PRINT_BARCODE_ENABLED": "bool",
     "ACCEPTABLE_FILE_TYPES": "set_str",
@@ -215,13 +233,10 @@ def save_config():
     if not values:
         return jsonify({"error": "No settings provided"}), 400
 
-    # Cross-field check: default instrument must be one of the listed instruments.
-    instruments = values.get("INSTRUMENTS", conf.INSTRUMENTS)
+    # Cross-field check: default instrument must be known to the registry.
     default = values.get("DEFAULT_INSTRUMENT_NAME", conf.DEFAULT_INSTRUMENT_NAME)
-    if not instruments:
-        return jsonify({"error": "INSTRUMENTS cannot be empty"}), 400
-    if default and default not in instruments:
-        return jsonify({"error": f"Default instrument '{default}' is not in the instruments list"}), 400
+    if default and default not in registry.INSTRUMENTS:
+        return jsonify({"error": f"Default instrument '{default}' is not a registered instrument"}), 400
 
     try:
         _write_config(values)
@@ -233,18 +248,17 @@ def save_config():
 
 @app.post("/api/user/lookup")
 def user_lookup():
-    email = (request.json or {}).get("email", "").strip()
-    if not email:
-        return jsonify({"error": "email required"}), 400
+    data = request.json or {}
+    identifier = (data.get("identifier") or data.get("email") or "").strip()
+    if not identifier:
+        return jsonify({"error": "identifier required"}), 400
     try:
-        result = backend.lookup_user_by_email(email)
-        # backend.logger.info(f"Lookup for email '{email}' returned: {result}")
+        result = backend.lookup_user(identifier)
     except Exception as e:
         backend.logger.error(e)
         return jsonify({"error": str(e)}), 500
     if not result:
-        backend.logger.info(f"No user found for email '{email}'")
-        return jsonify({"error": f"No user found for '{email}'"}), 404
+        return jsonify({"error": f"No user found for '{identifier}'"}), 404
     return jsonify(result)
 
 
@@ -336,6 +350,7 @@ def do_upload():
     orcid = data["orcid"].strip()
     project_id = data["project_id"].strip()
     instrument_name = data["instrument_name"].strip()
+    ingestor = (data.get("ingestor") or "").strip() or None
     sample_unique_id = data.get("sample_unique_id", None)
     session_dsid = data.get("session_dsid", None)
     comments = data.get("comments", "").strip()
@@ -356,7 +371,7 @@ def do_upload():
     if conf.IS_SESSION:
         # Session mode — existing behavior. Create parent session record sync so
         # the UI can show the Crucible link + QR before the flow runs.
-        deployment_name = conf.INSTRUMENT_FLOWS.get(instrument_name)
+        deployment_name = registry.INSTRUMENT_FLOWS.get(instrument_name)
         if not deployment_name:
             return jsonify({"error": f"No upload flow configured for instrument '{instrument_name}'"}), 400
         try:
@@ -385,6 +400,7 @@ def do_upload():
                     "session_dsid": dsid,
                     "kw_list": kw_list,
                     "comments": comments,
+                    "ingestor": ingestor,
                 },
                 timeout=0,
             )
@@ -420,6 +436,7 @@ def do_upload():
                     "sample_unique_id": sample_unique_id,
                     "kw_list": kw_list,
                     "comments": comments,
+                    "ingestor": ingestor,
                 },
                 timeout=0,
             )
@@ -445,6 +462,7 @@ def do_upload():
                 "sample_unique_id": sample_unique_id,
                 "kw_list": kw_list,
                 "comments": comments,
+                "ingestor": ingestor,
             },
             timeout=0,
         )
@@ -457,12 +475,120 @@ def do_upload():
         return jsonify({"error": str(e)}), 500
 
 
+@app.post("/api/parse_files")
+def parse_files():
+    data = request.json or {}
+    instrument = (data.get("instrument") or "").strip()
+    paths = data.get("files") or []
+    if not instrument or not paths:
+        return jsonify({"error": "instrument and files required"}), 400
+    parser = registry.FILE_PARSERS.get(instrument)
+    if parser is None:
+        return jsonify({"error": f"No file parser registered for instrument '{instrument}'"}), 400
+    results = []
+    for path in paths:
+        if not os.path.isfile(path):
+            return jsonify({"error": f"File not found: {path}"}), 400
+        try:
+            samples = parser(path)
+        except Exception as e:
+            backend.logger.error(f"Failed to parse {path}: {repr(e)}")
+            return jsonify({"error": f"Could not read {os.path.basename(path)}: {e}"}), 500
+        results.append({
+            "path": path,
+            "basename": os.path.basename(path),
+            "samples": samples,
+        })
+    return jsonify({"files": results})
+
+
+@app.post("/api/resolve_holders")
+def resolve_holders():
+    data = request.json or {}
+    instrument = (data.get("instrument") or "").strip()
+    holder_uuids = [u.strip() for u in (data.get("holder_uuids") or [])]
+    layout_name = (data.get("layout_name") or "").strip()
+    if not instrument:
+        return jsonify({"error": "instrument required"}), 400
+    if not any(holder_uuids):
+        return jsonify({"error": "at least one holder UUID required"}), 400
+    try:
+        files = backend.resolve_holders(instrument, holder_uuids, layout_name)
+    except Exception as e:
+        backend.logger.error(f"resolve_holders failed: {repr(e)}")
+        return jsonify({"error": str(e)}), 500
+    return jsonify({"files": files})
+
+
+@app.post("/api/multi_assignment/upload")
+def multi_assignment_upload():
+    from prefect.deployments import run_deployment
+    data = request.json or {}
+    orcid = (data.get("orcid") or "").strip()
+    project_id = (data.get("project_id") or "").strip()
+    instrument_name = (data.get("instrument_name") or "").strip()
+    ingestor = (data.get("ingestor") or "").strip() or None
+    kw_list = data.get("kw_list") or []
+    comments = data.get("comments") or None
+    assignments = data.get("assignments") or []
+
+    if not orcid or not project_id:
+        return jsonify({"error": "orcid and project_id required"}), 400
+    if not assignments:
+        return jsonify({"error": "assignments list required"}), 400
+
+    try:
+        valid_dsids = backend.existing_dsids(orcid, project_id)
+    except Exception as e:
+        backend.logger.error(e)
+        return jsonify({"error": str(e)}), 500
+
+    submitted = []
+    for item in assignments:
+        file_path = item.get("file", "")
+        sample_uuids = item.get("sample_uuids") or []
+        excluded_uuids = item.get("excluded_uuids") or []
+        link_samples = bool(item.get("link_samples", False))
+        if not file_path:
+            continue
+        try:
+            dsid, _ = backend.resolve_dsid_for_file(file_path, valid_dsids)
+            flow_run = run_deployment(
+                "multi-assignment-upload/multi-assignment-upload",
+                parameters={
+                    "file": file_path,
+                    "sample_uuids": sample_uuids,
+                    "excluded_uuids": excluded_uuids,
+                    "link_samples": link_samples,
+                    "project_id": project_id,
+                    "orcid": orcid,
+                    "instrument_name": instrument_name,
+                    "dsid": dsid,
+                    "kw_list": kw_list,
+                    "comments": comments,
+                    "ingestor": ingestor,
+                },
+                timeout=0,
+            )
+            submitted.append({
+                "file": os.path.basename(file_path),
+                "flow_run_id": str(flow_run.id),
+                "dsid": dsid,
+            })
+        except Exception as e:
+            backend.logger.error(f"multi_assignment upload failed for {file_path}: {repr(e)}")
+            return jsonify({"error": str(e)}), 500
+
+    return jsonify({"submitted": submitted})
+
+
 if __name__ == "__main__":
     # Flask runs in a daemon thread; tkinter mainloop holds the main thread.
+    port = int(os.environ.get("FLASK_PORT", 5000))
     flask_thread = threading.Thread(
-        target=lambda: app.run(debug=False, port=5000), daemon=True
+        target=lambda: app.run(debug=False, port=port), daemon=True
     )
     flask_thread.start()
-    webbrowser.open("http://localhost:5000")
+    webbrowser.open(f"http://localhost:{port}")
     _tk_root.after(50, _check_browse_queue)
     _tk_root.mainloop()

@@ -35,20 +35,20 @@
 
   <div class="container-fluid px-4">
 
-    <!-- Row 1: User Info + Sample Info -->
+    <!-- Two-column layout: left 1/3 (User Info + File Selection) | right 2/3 (Sample Assignments) -->
     <div class="row g-4 mb-4">
 
-      <!-- User Info -->
-      <div class="col-12 col-md-6">
+      <!-- Left column: User Info -->
+      <div class="col-12 col-md-4">
         <div class="card h-100 shadow-sm">
           <div class="card-body">
             <h5 class="card-title text-primary mb-3">User Info</h5>
 
-            <!-- Email -->
-            <label class="form-label fw-semibold">Email</label>
+            <!-- User identifier -->
+            <label class="form-label fw-semibold">Email / ORCID / Username</label>
             <div class="input-group mb-1">
-              <input id="email" type="email" class="form-control"
-                     placeholder="Enter your email address"
+              <input id="email" type="text" class="form-control"
+                     placeholder="Email, ORCID, or username"
                      onkeydown="if(event.key==='Enter') lookupUser()" />
               <button class="btn btn-outline-primary" onclick="lookupUser()" id="btn-user-lookup">
                 <span id="spinner-user" class="spinner-border spinner-border-sm d-none" role="status"></span>
@@ -73,17 +73,25 @@
 
             <!-- Instrument -->
             <label class="form-label fw-semibold">Instrument</label>
-            <select id="instrument" class="form-select">
+            <select id="instrument" class="form-select mb-3" onchange="onInstrumentChange()">
               <option value="">Select instrument</option>
+            </select>
+
+            <!-- Ingestor -->
+            <label class="form-label fw-semibold">Ingestor</label>
+            <select id="ingestor" class="form-select">
+              <option value="">(server default)</option>
             </select>
 
           </div>
         </div>
       </div>
 
-      <!-- Sample Info -->
-      <div class="col-12 col-md-6">
-        <div class="card h-100 shadow-sm">
+      <!-- Right column: Sample Info / MA panel -->
+      <div class="col-12 col-md-8 d-flex flex-column">
+
+        <!-- Sample Info (hidden in multi_assignment mode) -->
+        <div id="sample-info-card" class="card h-100 shadow-sm">
           <div class="card-body">
             <h5 class="card-title text-primary mb-1">Sample Info</h5>
             <p class="text-muted small mb-3">Optional — look up by name or unique ID</p>
@@ -135,10 +143,18 @@
 
           </div>
         </div>
+
+        <!-- Per-instrument panels (each rendered server-side; JS shows the active one) -->
+        {% for instrument_name, tmpl in panel_templates.items() %}
+        <div id="panel-{{ instrument_name }}" class="instrument-panel h-100 d-none">
+          {% include tmpl %}
+        </div>
+        {% endfor %}
+
       </div>
     </div>
 
-    <!-- Row 2: Session / Files -->
+    <!-- File Selection (full width) -->
     <div class="card shadow-sm mb-4">
       <div class="card-body">
         <h5 id="session-card-title" class="card-title text-primary mb-3">Session</h5>
@@ -147,6 +163,7 @@
                  placeholder="No folder selected — click Browse"
                  readonly style="background:#e9ecef;" />
           <button id="btn-browse" class="btn btn-outline-secondary" onclick="browseFolder()">Browse…</button>
+          <button id="btn-clear" class="btn btn-outline-secondary" onclick="clearSelection()" title="Clear selection">&#x2715;</button>
         </div>
         <!-- Shown only in non-session mode when 2+ files are selected. -->
         <ul id="selected-files-list" class="list-group list-group-flush small mb-3 d-none"
@@ -181,9 +198,13 @@
       </div>
     </div>
 
-    <!-- Row 3: Status + Upload -->
+    <!-- Status + Upload -->
     <div class="d-flex align-items-center gap-3 mb-5">
       <div id="status-box" class="flex-grow-1"></div>
+      <button id="btn-ma-upload" class="btn btn-success btn-lg px-5 d-none" onclick="confirmAssignmentUpload()">
+        <span id="spinner-ma-upload" class="spinner-border spinner-border-sm d-none me-2" role="status"></span>
+        Confirm &amp; Upload
+      </button>
       <button id="btn-upload" class="btn btn-primary btn-lg px-5" onclick="doUpload()">
         <span id="spinner-upload" class="spinner-border spinner-border-sm d-none me-2" role="status"></span>
         Upload
@@ -311,32 +332,13 @@
           <label class="form-label fw-semibold">Default browse directory</label>
           <input id="cfg-browse-dir" type="text" class="form-control mb-3" placeholder="(none) — e.g. /data/sessions" />
 
-          <!-- Instruments -->
-          <label class="form-label fw-semibold">Instruments</label>
-          <div id="cfg-instruments" class="d-flex flex-wrap gap-1 mb-2"></div>
-          <div class="input-group input-group-sm mb-3" style="max-width: 320px;">
-            <input id="cfg-instrument-input" type="text" class="form-control" placeholder="Add instrument..."
-                   onkeydown="if(event.key==='Enter'){event.preventDefault(); addInstrumentChip()}" />
-            <button class="btn btn-outline-secondary" type="button" onclick="addInstrumentChip()">+</button>
-          </div>
-
           <!-- Default instrument -->
           <label class="form-label fw-semibold">Default instrument</label>
-          <select id="cfg-default-instrument" class="form-select mb-3"></select>
-
-          <!-- Instrument flows -->
-          <label class="form-label fw-semibold">Instrument flows
-            <span class="text-muted small fw-normal">— instrument → Prefect deployment (session mode)</span>
-          </label>
-          <div id="cfg-flows" class="mb-2"></div>
-          <button class="btn btn-outline-secondary btn-sm mb-3" type="button" onclick="addFlowRow()">+ Add flow</button>
-
-          <!-- Post-processing requests -->
-          <label class="form-label fw-semibold">Post-processing requests
-            <span class="text-muted small fw-normal">— instrument → comma-separated request names</span>
-          </label>
-          <div id="cfg-postproc" class="mb-2"></div>
-          <button class="btn btn-outline-secondary btn-sm mb-3" type="button" onclick="addPostProcRow()">+ Add post-processing</button>
+          <select id="cfg-default-instrument" class="form-select mb-3">
+            {% for instr in instruments %}
+            <option value="{{ instr }}">{{ instr }}</option>
+            {% endfor %}
+          </select>
 
           <!-- Acceptable file types -->
           <label class="form-label fw-semibold">Acceptable file types</label>
@@ -358,8 +360,7 @@
           </div>
 
           <div class="alert alert-warning small mb-0 mt-3">
-            Note: <code>POST_PROCESSING_REQUESTS</code>, <code>CHAIN_POST_PROCESSING</code>, and
-            <code>ACCEPTABLE_FILE_TYPES</code> are read by the Prefect worker process — restart the worker for those to take effect.
+            Note: <code>CHAIN_POST_PROCESSING</code> and <code>ACCEPTABLE_FILE_TYPES</code> are read by the Prefect worker process — restart the worker for those to take effect.
           </div>
 
           <div id="cfg-error" class="alert alert-danger d-none mt-3 mb-0"></div>
@@ -385,6 +386,11 @@
       projects: [],
       isSession: true,
       selectedPaths: [],
+      uiModes: {},
+      holderLayouts: {},
+      defaultHolderLayouts: {},
+      activeHolderLayout: {},
+      defaultIngestors: {},
     };
 
     // -------------------------------------------------------------------------
@@ -405,7 +411,25 @@
       }
 
       state.isSession = !!data.is_session;
+      state.uiModes = data.ui_modes || {};
+      state.holderLayouts = data.holder_layouts || {};
+      state.defaultHolderLayouts = data.default_holder_layouts || {};
+      state.defaultIngestors = data.default_ingestors || {};
       applyUploadModeUI();
+
+      // Populate ingestor dropdown from server list
+      const ingestorSel = document.getElementById("ingestor");
+      fetch("/api/ingestors").then(r => r.json()).then(d => {
+        (d.ingestors || []).forEach(name => {
+          const opt = document.createElement("option");
+          opt.value = name;
+          opt.textContent = name;
+          ingestorSel.appendChild(opt);
+        });
+        _applyDefaultIngestor(document.getElementById("instrument").value);
+      }).catch(() => {});
+
+      onInstrumentChange();
 
       // Auto-populate from query params (e.g. ?user_email=xx&project=xx)
       const params = new URLSearchParams(window.location.search);
@@ -424,8 +448,8 @@
     // User lookup
     // -------------------------------------------------------------------------
     async function lookupUser() {
-      const email = document.getElementById("email").value.trim();
-      if (!email) return;
+      const identifier = document.getElementById("email").value.trim();
+      if (!identifier) return;
 
       setSpinner("user", true);
       clearStatus();
@@ -434,11 +458,11 @@
         const res = await fetch("/api/user/lookup", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email }),
+          body: JSON.stringify({ identifier }),
         });
         const data = await res.json();
         if (!res.ok) {
-          alert("User not found. Try entering your ORCID instead of an email address.");
+          alert(data.error || "User not found. Check your email, ORCID, or username and try again.");
           return;
         }
 
@@ -677,9 +701,21 @@
         const data = await res.json();
         state.selectedPaths = data.paths || [];
         renderSelectedFiles();
+        const instr = document.getElementById("instrument").value;
+        if (state.uiModes[instr] === 'multi_assignment') {
+          parseAssignmentFiles(instr, state.selectedPaths);
+        }
       } catch (e) {
         showStatus("Browse failed: " + e.message, "danger");
       }
+    }
+
+    function clearSelection() {
+      state.selectedPaths = [];
+      renderSelectedFiles();
+      _clearNirvanaUI();
+      // Also clear holder UUID inputs
+      document.querySelectorAll(".ma-holder-uuid").forEach(el => el.value = "");
     }
 
     // -------------------------------------------------------------------------
@@ -743,6 +779,7 @@
         orcid,
         project_id,
         instrument_name,
+        ingestor: document.getElementById("ingestor").value || null,
         sample_unique_id: document.getElementById("sample-uid").value.trim() || null,
         comments: document.getElementById("comments").value.trim(),
         keywords: getKeywords(),
@@ -826,7 +863,7 @@
           document.getElementById("prefect-link").href = prefectUrl;
 
           // Per-dataset link for session/single-insitu; project page link for multi.
-          const crucibleBaseUrl = "https://crucible-graph-explorer-776258882599.us-central1.run.app";
+          const crucibleBaseUrl = "https://crucible.lbl.gov/explore";
           const linkUrl = isSingleDataset
             ? `${crucibleBaseUrl}/${data.project_id}/datasets/${data.dsid}`
             : `${crucibleBaseUrl}/${data.project_id}/#tab=datasets`;
@@ -849,6 +886,339 @@
       } finally {
         setSpinner("upload", false);
         document.getElementById("btn-upload").disabled = false;
+      }
+    }
+
+    // -------------------------------------------------------------------------
+    // Nirvana sample assignment UI
+    // -------------------------------------------------------------------------
+    let _maAssignments = [];   // [{ file, basename, samples: [{position,tray,slot,name,uuid,excluded}] }]
+
+    function _applyDefaultIngestor(instrument) {
+      const def = state.defaultIngestors[instrument] || "";
+      const sel = document.getElementById("ingestor");
+      // Only change if the value exists in the dropdown (or reset to server default)
+      if (!def || [...sel.options].some(o => o.value === def)) {
+        sel.value = def;
+      }
+    }
+
+    function onInstrumentChange() {
+      const instrument = document.getElementById("instrument").value;
+      _applyDefaultIngestor(instrument);
+      const isMultiAssignment = state.uiModes[instrument] === 'multi_assignment';
+
+      // Hide all per-instrument panels
+      document.querySelectorAll('.instrument-panel').forEach(el => el.classList.add('d-none'));
+
+      document.getElementById("sample-info-card").classList.toggle("d-none", isMultiAssignment);
+      document.getElementById("btn-upload").classList.toggle("d-none", isMultiAssignment);
+      document.getElementById("btn-ma-upload").classList.toggle("d-none", !isMultiAssignment);
+
+      if (!isMultiAssignment) {
+        _clearNirvanaUI();
+        return;
+      }
+
+      // Show this instrument's panel
+      const panel = document.getElementById(`panel-${instrument}`);
+      if (panel) panel.classList.remove('d-none');
+
+      // Init active holder layout for this instrument
+      if (!state.activeHolderLayout[instrument]) {
+        const layouts = state.holderLayouts[instrument] || {};
+        state.activeHolderLayout[instrument] =
+          state.defaultHolderLayouts[instrument] || Object.keys(layouts)[0] || '';
+      }
+      const layoutSel = document.getElementById("ma-holder-layout");
+      if (layoutSel) layoutSel.value = state.activeHolderLayout[instrument];
+
+      const hasHolderLayout = !!(state.holderLayouts[instrument] && Object.keys(state.holderLayouts[instrument]).length);
+      document.getElementById("ma-source-toggle").classList.toggle("d-none", !hasHolderLayout);
+      document.getElementById("ma-src-file").checked = true;
+      _renderHolderFields(instrument);
+      document.getElementById("ma-holder-fields").classList.add("d-none");
+      document.getElementById("ma-empty-msg").textContent = "Browse and select files above to load assignments.";
+      if (state.selectedPaths.length > 0) {
+        parseAssignmentFiles(instrument, state.selectedPaths);
+      }
+    }
+
+    function onMaSourceChange() {
+      const isHolders = document.getElementById("ma-src-holders").checked;
+      document.getElementById("ma-holder-fields").classList.toggle("d-none", !isHolders);
+      if (isHolders) {
+        document.getElementById("ma-empty-msg").textContent = "Enter holder UUIDs above and click Resolve.";
+        _clearNirvanaUI();
+      } else {
+        document.getElementById("ma-empty-msg").textContent = "Browse and select files above to load assignments.";
+        _clearNirvanaUI();
+        const instrument = document.getElementById("instrument").value;
+        if (state.selectedPaths.length > 0) parseAssignmentFiles(instrument, state.selectedPaths);
+      }
+    }
+
+    function _renderHolderFields(instrument) {
+      const activeLayout = state.activeHolderLayout[instrument] || '';
+      const layouts = state.holderLayouts[instrument] || {};
+      const holders = layouts[activeLayout] || [];
+      const container = document.getElementById("ma-holder-inputs");
+      container.innerHTML = "";
+      if (!holders.length) {
+        container.innerHTML = `<input type="text" class="form-control form-control-sm mb-1 ma-holder-uuid"
+          placeholder="Holder UUID" />`;
+        return;
+      }
+      holders.forEach(h => {
+        const row = document.createElement("div");
+        row.className = "input-group input-group-sm mb-1";
+        row.innerHTML = `
+          <span class="input-group-text" style="min-width:80px;">${h.label}</span>
+          <input type="text" class="form-control ma-holder-uuid" placeholder="UUID" />`;
+        container.appendChild(row);
+      });
+    }
+
+    function onHolderLayoutChange() {
+      const instrument = document.getElementById("instrument").value;
+      const layoutSel = document.getElementById("ma-holder-layout");
+      if (layoutSel) state.activeHolderLayout[instrument] = layoutSel.value;
+      _renderHolderFields(instrument);
+      _clearNirvanaUI();
+    }
+
+    async function resolveHolders() {
+      const instrument = document.getElementById("instrument").value;
+      const uuids = [...document.querySelectorAll(".ma-holder-uuid")].map(el => el.value.trim());
+      if (!uuids.some(Boolean)) {
+        showStatus("Enter at least one holder UUID.", "warning");
+        return;
+      }
+      if (!_maAssignments.length) {
+        showStatus("Browse and select .h5 files first, then resolve holders to update sample assignments.", "warning");
+        return;
+      }
+      document.getElementById("spinner-ma-resolve").classList.remove("d-none");
+      try {
+        const res = await fetch("/api/resolve_holders", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ instrument, holder_uuids: uuids, layout_name: state.activeHolderLayout[instrument] || '' }),
+        });
+        const data = await res.json();
+        if (!res.ok) { showStatus(data.error || "Failed to resolve holders.", "danger"); return; }
+        const resolved = (data.files || [])[0];
+        if (resolved) {
+          _maAssignments.forEach(fileObj => {
+            fileObj.samples = resolved.samples.map(s => ({...s}));
+            fileObj.source = 'holders';
+          });
+          _buildNirvanaTabs();
+        }
+      } catch (e) {
+        showStatus("Resolve error: " + e.message, "danger");
+      } finally {
+        document.getElementById("spinner-ma-resolve").classList.add("d-none");
+      }
+    }
+
+    function _clearNirvanaUI() {
+      _maAssignments = [];
+      document.getElementById("ma-tabs").innerHTML = "";
+      document.getElementById("ma-tabs").classList.add("d-none");
+      document.getElementById("ma-tab-content").innerHTML = "";
+      document.getElementById("ma-empty-msg").classList.remove("d-none");
+    }
+
+    async function parseAssignmentFiles(instrument, paths) {
+      _clearNirvanaUI();
+      if (!paths.length) return;
+
+      document.getElementById("ma-parse-spinner").classList.remove("d-none");
+      try {
+        const res = await fetch("/api/parse_files", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ instrument, files: paths }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          showStatus(data.error || "Failed to parse h5 files.", "danger");
+          return;
+        }
+        _maAssignments = data.files.map(f => ({...f, source: 'file'}));
+        _buildNirvanaTabs();
+      } catch (e) {
+        showStatus("Parse error: " + e.message, "danger");
+      } finally {
+        document.getElementById("ma-parse-spinner").classList.add("d-none");
+      }
+    }
+
+    function _buildNirvanaTabs() {
+      const tabList = document.getElementById("ma-tabs");
+      const tabContent = document.getElementById("ma-tab-content");
+      tabList.innerHTML = "";
+      tabContent.innerHTML = "";
+
+      if (!_maAssignments.length) return;
+
+      document.getElementById("ma-empty-msg").classList.add("d-none");
+      tabList.classList.remove("d-none");
+
+      _maAssignments.forEach((fileObj, fi) => {
+        const tabId = `ma-tab-${fi}`;
+        const paneId = `ma-pane-${fi}`;
+        const isActive = fi === 0;
+
+        // Tab button — truncate label to keep tabs compact, full path in tooltip
+        const label = fileObj.basename.length > 14
+          ? fileObj.basename.slice(0, 6) + "…" + fileObj.basename.slice(-6)
+          : fileObj.basename;
+        const li = document.createElement("li");
+        li.className = "nav-item";
+        li.innerHTML = `
+          <button class="nav-link px-2 py-1 small${isActive ? " active" : ""}" id="${tabId}"
+                  data-bs-toggle="tab" data-bs-target="#${paneId}"
+                  type="button" role="tab" title="${fileObj.path}">
+            ${label}
+          </button>`;
+        tabList.appendChild(li);
+
+        // Tab pane with 4×4 grid
+        const pane = document.createElement("div");
+        pane.className = `tab-pane fade${isActive ? " show active" : ""}`;
+        pane.id = paneId;
+        pane.setAttribute("role", "tabpanel");
+
+        const rows = [[], [], [], []];
+        fileObj.samples.forEach((s, i) => rows[Math.floor(i / 4)].push({ s, i }));
+
+        let gridHtml = '<div class="container-fluid px-0">';
+        rows.forEach(row => {
+          gridHtml += '<div class="row g-2 mb-2">';
+          row.forEach(({ s, i }) => {
+            gridHtml += `
+              <div class="col-3">
+                <div class="card p-2 h-100 border" id="ma-cell-${fi}-${i}">
+                  <div class="d-flex justify-content-between align-items-start mb-1">
+                    <small class="text-muted fw-semibold">${s.position}</small>
+                    <button type="button" class="btn-close" style="font-size:0.6rem;"
+                            onclick="toggleNirvanaSample(${fi}, ${i})"
+                            title="Exclude/include this sample"></button>
+                  </div>
+                  <div class="small fw-semibold text-truncate mb-1" title="${s.name}">${s.name}</div>
+                  <input type="text" class="form-control form-control-sm font-monospace"
+                         id="ma-uuid-${fi}-${i}"
+                         value="${s.uuid}"
+                         onchange="_maAssignments[${fi}].samples[${i}].uuid = this.value"
+                         title="Sample UUID" />
+                </div>
+              </div>`;
+          });
+          // Pad row to 4 cells if fewer than 4 samples
+          for (let pad = row.length; pad < 4; pad++) {
+            gridHtml += '<div class="col-3"><div class="card p-2 h-100 border border-dashed bg-light text-muted small d-flex align-items-center justify-content-center">—</div></div>';
+          }
+          gridHtml += '</div>';
+        });
+        gridHtml += '</div>';
+
+        pane.innerHTML = gridHtml;
+        tabContent.appendChild(pane);
+      });
+    }
+
+    function toggleNirvanaSample(fi, i) {
+      const sample = _maAssignments[fi].samples[i];
+      sample.excluded = !sample.excluded;
+      const cell = document.getElementById(`ma-cell-${fi}-${i}`);
+      const uuidInput = document.getElementById(`ma-uuid-${fi}-${i}`);
+      if (sample.excluded) {
+        cell.classList.add("opacity-50", "bg-light");
+        uuidInput.disabled = true;
+      } else {
+        cell.classList.remove("opacity-50", "bg-light");
+        uuidInput.disabled = false;
+      }
+    }
+
+    async function confirmAssignmentUpload() {
+      const orcid = state.orcid;
+      const project_id = document.getElementById("project").value;
+      const instrument_name = document.getElementById("instrument").value;
+      const missing = [];
+      if (!orcid) missing.push("user (look up first)");
+      if (!project_id) missing.push("project");
+      if (!_maAssignments.length) missing.push("files (browse and select first)");
+      if (missing.length) { showStatus("Please fill in: " + missing.join(", ") + ".", "danger"); return; }
+
+      const assignments = _maAssignments.map(fileObj => ({
+        file: fileObj.path,
+        sample_uuids: fileObj.samples.filter(s => !s.excluded).map(s => s.uuid).filter(Boolean),
+        excluded_uuids: fileObj.samples.filter(s => s.excluded).map(s => s.uuid).filter(Boolean),
+        link_samples: fileObj.source === 'holders',
+      }));
+
+      const payload = {
+        orcid,
+        project_id,
+        instrument_name,
+        ingestor: document.getElementById("ingestor").value || null,
+        kw_list: getKeywords(),
+        comments: document.getElementById("comments").value.trim() || null,
+        assignments,
+      };
+
+      document.getElementById("spinner-ma-upload").classList.remove("d-none");
+      document.getElementById("btn-ma-upload").disabled = true;
+      resetUploadModal();
+      if (!uploadModal) uploadModal = new bootstrap.Modal(document.getElementById("upload-modal"));
+      uploadModal.show();
+
+      try {
+        const res = await fetch("/api/multi_assignment/upload", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        document.getElementById("submitting-section").classList.add("d-none");
+
+        if (res.ok) {
+          const submitted = data.submitted || [];
+          document.getElementById("upload-modal-title").textContent =
+            `${submitted.length} upload${submitted.length !== 1 ? "s" : ""} submitted`;
+          document.getElementById("upload-modal-header").classList.add("bg-success", "text-white");
+          document.getElementById("success-section").classList.remove("d-none");
+
+          // Point links to the first submitted run/dataset
+          const first = submitted[0] || {};
+          const prefectUrl = "http://127.0.0.1:4200/flow-runs/flow-run/" + (first.flow_run_id || "");
+          document.getElementById("prefect-link").href = prefectUrl;
+          const crucibleBaseUrl = "https://crucible.lbl.gov/explore";
+          const linkUrl = first.dsid
+            ? `${crucibleBaseUrl}/${project_id}/datasets/${first.dsid}`
+            : `${crucibleBaseUrl}/${project_id}/#tab=datasets`;
+          document.getElementById("crucible-link").href = linkUrl;
+          const qrContainer = document.getElementById("qr-code");
+          qrContainer.innerHTML = "";
+          new QRCode(qrContainer, { text: linkUrl, width: 256, height: 256 });
+        } else {
+          document.getElementById("upload-modal-title").textContent = "Upload Failed";
+          document.getElementById("upload-modal-header").classList.add("bg-danger", "text-white");
+          document.getElementById("error-section").classList.remove("d-none");
+          document.getElementById("error-message").textContent = data.error || "Unknown error";
+        }
+      } catch (e) {
+        document.getElementById("submitting-section").classList.add("d-none");
+        document.getElementById("upload-modal-title").textContent = "Upload Failed";
+        document.getElementById("upload-modal-header").classList.add("bg-danger", "text-white");
+        document.getElementById("error-section").classList.remove("d-none");
+        document.getElementById("error-message").textContent = "Upload error: " + e.message;
+      } finally {
+        document.getElementById("spinner-ma-upload").classList.add("d-none");
+        document.getElementById("btn-ma-upload").disabled = false;
       }
     }
 
@@ -880,6 +1250,7 @@
       }
       _pendingUploadParams = null;
       _selectedSessionDsid = null;
+      _clearNirvanaUI();
       clearStatus();
     }
 
@@ -914,7 +1285,7 @@
     // Instrument config editor
     // -------------------------------------------------------------------------
     let configModal = null;
-    const cfgState = { instruments: [], fileTypes: [] };
+    const cfgState = { fileTypes: [] };
 
     async function openConfig() {
       document.getElementById("cfg-error").classList.add("d-none");
@@ -927,18 +1298,11 @@
         document.getElementById("cfg-browse-dir").value = c.DEFAULT_BROWSE_DIR || "";
         document.getElementById("cfg-chain-postproc").checked = !!c.CHAIN_POST_PROCESSING;
         document.getElementById("cfg-print-barcode").checked = !!c.PRINT_BARCODE_ENABLED;
-
-        cfgState.instruments = [...(c.INSTRUMENTS || [])];
         cfgState.fileTypes = [...(c.ACCEPTABLE_FILE_TYPES || [])];
-        renderInstrumentChips();
         renderFileTypeChips();
-        updateDefaultInstrumentOptions(c.DEFAULT_INSTRUMENT_NAME || "");
 
-        document.getElementById("cfg-flows").innerHTML = "";
-        Object.entries(c.INSTRUMENT_FLOWS || {}).forEach(([k, v]) => addFlowRow(k, v));
-
-        document.getElementById("cfg-postproc").innerHTML = "";
-        Object.entries(c.POST_PROCESSING_REQUESTS || {}).forEach(([k, v]) => addPostProcRow(k, (v || []).join(", ")));
+        const defSel = document.getElementById("cfg-default-instrument");
+        if (c.DEFAULT_INSTRUMENT_NAME) defSel.value = c.DEFAULT_INSTRUMENT_NAME;
 
         if (!configModal) configModal = new bootstrap.Modal(document.getElementById("config-modal"));
         configModal.show();
@@ -960,25 +1324,6 @@
       return span;
     }
 
-    function renderInstrumentChips() {
-      const box = document.getElementById("cfg-instruments");
-      box.innerHTML = "";
-      cfgState.instruments.forEach((name, i) => {
-        box.appendChild(chip(name, () => { cfgState.instruments.splice(i, 1); renderInstrumentChips(); updateDefaultInstrumentOptions(); }));
-      });
-    }
-
-    function addInstrumentChip() {
-      const input = document.getElementById("cfg-instrument-input");
-      const val = input.value.trim();
-      if (val && !cfgState.instruments.includes(val)) {
-        cfgState.instruments.push(val);
-        renderInstrumentChips();
-        updateDefaultInstrumentOptions();
-      }
-      input.value = "";
-    }
-
     function renderFileTypeChips() {
       const box = document.getElementById("cfg-filetypes");
       box.innerHTML = "";
@@ -998,65 +1343,14 @@
       input.value = "";
     }
 
-    function updateDefaultInstrumentOptions(preferred) {
-      const sel = document.getElementById("cfg-default-instrument");
-      const current = preferred !== undefined ? preferred : sel.value;
-      sel.innerHTML = "";
-      cfgState.instruments.forEach(name => {
-        const opt = document.createElement("option");
-        opt.value = name;
-        opt.textContent = name;
-        sel.appendChild(opt);
-      });
-      if (cfgState.instruments.includes(current)) sel.value = current;
-    }
-
-    function dictRow(containerId, keyVal, valVal, valPlaceholder) {
-      const row = document.createElement("div");
-      row.className = "input-group input-group-sm mb-1";
-      row.innerHTML = `
-        <input type="text" class="form-control cfg-key" placeholder="instrument" style="max-width: 180px;" />
-        <input type="text" class="form-control cfg-val" />
-        <button class="btn btn-outline-danger" type="button">&times;</button>`;
-      row.querySelector(".cfg-key").value = keyVal || "";
-      const v = row.querySelector(".cfg-val");
-      v.value = valVal || "";
-      v.placeholder = valPlaceholder;
-      row.querySelector("button").onclick = () => row.remove();
-      document.getElementById(containerId).appendChild(row);
-    }
-
-    function addFlowRow(key, val) { dictRow("cfg-flows", key, val, "flow-name/deployment-name"); }
-    function addPostProcRow(key, val) { dictRow("cfg-postproc", key, val, "request_a, request_b"); }
-
-    function collectDict(containerId, asList) {
-      const out = {};
-      document.querySelectorAll(`#${containerId} .input-group`).forEach(row => {
-        const key = row.querySelector(".cfg-key").value.trim();
-        const raw = row.querySelector(".cfg-val").value.trim();
-        if (!key) return;
-        out[key] = asList ? raw.split(",").map(s => s.trim()).filter(Boolean) : raw;
-      });
-      return out;
-    }
-
     async function saveConfig() {
       const errBox = document.getElementById("cfg-error");
       errBox.classList.add("d-none");
 
-      if (!cfgState.instruments.length) {
-        errBox.textContent = "At least one instrument is required.";
-        errBox.classList.remove("d-none");
-        return;
-      }
-
       const payload = {
         IS_SESSION: document.getElementById("cfg-is-session").value === "true",
         DEFAULT_BROWSE_DIR: document.getElementById("cfg-browse-dir").value.trim(),
-        INSTRUMENTS: cfgState.instruments,
         DEFAULT_INSTRUMENT_NAME: document.getElementById("cfg-default-instrument").value,
-        INSTRUMENT_FLOWS: collectDict("cfg-flows", false),
-        POST_PROCESSING_REQUESTS: collectDict("cfg-postproc", true),
         ACCEPTABLE_FILE_TYPES: cfgState.fileTypes,
         CHAIN_POST_PROCESSING: document.getElementById("cfg-chain-postproc").checked,
         PRINT_BARCODE_ENABLED: document.getElementById("cfg-print-barcode").checked,
@@ -1107,5 +1401,12 @@
 
   <script src="{{ url_for('static', filename='js/ai_services.js') }}"></script>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+
+  <div style="position:fixed;bottom:10px;left:10px;font-size:0.7rem;color:#555;
+              background:rgba(255,255,255,0.55);backdrop-filter:blur(4px);
+              border:1px solid rgba(0,0,0,0.1);border-radius:4px;
+              padding:2px 7px;pointer-events:none;z-index:9999;">
+    nano-crucible {{ crucible_version }}
+  </div>
 </body>
 </html>
