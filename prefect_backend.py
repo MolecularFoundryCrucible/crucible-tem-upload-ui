@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 import subprocess as sp
 from crucible import CrucibleClient
-from crucible.models import Dataset as BaseDataset
+from crucible.models import BaseDataset
 import logging
 from prefect import flow, task
 from prefect.logging import get_run_logger
@@ -38,51 +38,57 @@ def run_shell(cmd: str, checkflag: bool = True, background: bool = False) -> sp.
     return sp.run(cmd, stdout=sp.PIPE, stderr=sp.STDOUT, shell=True, universal_newlines=True, check=checkflag)
 
 
+def run_rclone_command(source_path: str = "", destination_path: str = "", cmd: str = "copy",
+                       background: bool = False, checkflag: bool = True, dry_run = False) -> sp.CompletedProcess | sp.Popen:
+    if len(destination_path.strip()) > 0:
+        destination_path = f'"{destination_path}"'
+    
+    source_path, destination_path = (x.replace(":gcs", "") for x in (source_path, destination_path))
+    
+    rclone_cmd = f'rclone {cmd} "{source_path}" {destination_path}'
 
-_ORCID_RE = re.compile(r'^\d{4}-\d{4}-\d{4}-\d{3}[\dX]$')
+    # Dry run first — check both exit code and output for errors
+    if dry_run:
+        dry_run = run_shell(f'{rclone_cmd} --dry-run', background=False, checkflag=False)
+        if dry_run.returncode != 0 or "ERROR" in (dry_run.stdout or "").upper():
+            msg = (
+                f"rclone dry run failed. Please check your rclone configuration "
+                f"with `rclone config`.\n{dry_run.stdout or ''}"
+            )
+            logger.error(msg)
+            raise RuntimeError(msg)
+
+    # Real copy
+    logger.info(f'copying file {source_path=} to {destination_path=}')
+    return run_shell(rclone_cmd, background=background, checkflag=checkflag)
 
 
-def _classify_identifier(identifier: str) -> str:
-    """Return 'orcid', 'email', or 'username'."""
-    clean = identifier.strip().split('/')[-1]  # strip https://orcid.org/ prefix if present
-    if _ORCID_RE.match(clean):
-        return 'orcid'
-    if '@' in identifier:
-        return 'email'
-    return 'username'
-
-
-def lookup_user(identifier: str) -> dict:
+def lookup_user_by_email(email: str) -> dict:
     """
-    Look up a user by email, ORCID, or username.
+    Look up a user by email address.
 
     Returns a dict with keys:
-        name     (str) display name
-        orcid    (str) ORCID identifier
+        name    (str) display name
+        orcid   (str) ORCID identifier
         projects (list[dict]) list of {project_id, title} dicts for the user's projects
 
     Returns an empty dict if the user is not found.
     """
-    id_type = _classify_identifier(identifier)
-    kwargs = {id_type: identifier.strip()}
-    user_info = client.users.get(**kwargs)
-    logger.info(f"Lookup for {id_type} '{identifier}' returned: {user_info}")
+    user_info = client.users.get(email=email)
+    logger.info(f"Lookup for email '{email}' returned: {user_info}")
     if user_info is None:
         return {}
 
     user_name = f"{user_info['first_name']} {user_info['last_name']}"
-    projects = client.projects.list(user_info['unique_id'], limit=None)
+    logger.info(f"User name for email '{email}' is: {user_name}")
+    projects = client.projects.list(user_info['unique_id'], limit = None)
     project_list = [{'project_id': x['project_id'], 'title': x.get('title') or ''}
                     for x in projects]
     project_list.sort(key=lambda p: p['project_id'])
-    logger.info(f"{len(project_list)} projects found for {id_type} '{identifier}'")
+    logger.info(f"{len(project_list)} projects found for email '{email}'")
     return {'name': user_name,
             'orcid': user_info['unique_id'],
             'projects': project_list}
-
-
-def lookup_user_by_email(email: str) -> dict:
-    return lookup_user(email)
 
 
 def lookup_sample(sample_name: str | None = None, sample_unique_id: str | None = None, project_id: str | None = None) -> dict:
@@ -268,7 +274,7 @@ def resolve_dsid_for_file(file_path: str, valid_dsids: set[str] | None = None) -
     """
     import mfid
     sha = _compute_sha256(file_path)
-    for f in client.files.list(sha256_hash=sha):
+    for f in client.files.list_files(sha256_hash=sha):
         match_dsid = f.get('dataset_mfid')
         if match_dsid and (valid_dsids is None or match_dsid in valid_dsids):
             return match_dsid, True
@@ -278,7 +284,7 @@ def resolve_dsid_for_file(file_path: str, valid_dsids: set[str] | None = None) -
 def resolve_dsids_parallel(files: list[str], valid_dsids: set[str] | None = None,
                            max_workers: int = 8) -> list[tuple[str, bool]]:
     """resolve_dsid_for_file for each file, in parallel. The lookups are I/O-bound
-    (file read + files.list HTTP call), so a thread pool overlaps them. Results are
+    (file read + list_files HTTP call), so a thread pool overlaps them. Results are
     returned in the same order as files.
     """
     from concurrent.futures import ThreadPoolExecutor
@@ -296,6 +302,19 @@ def identify_session_files(session_folder_path: str) -> list[str]:
         and f.stat().st_size < max_size
     ]
 
+
+@task(retries=3, retry_delay_seconds=10)
+def copy_all_files_to_gdrive(session_folder_path: str, instrument_name: str) -> None:
+    logger = get_run_logger()
+    p = Path(session_folder_path)
+    relative_folder_path = p.relative_to(p.anchor).as_posix()
+    dest = f"{instrument_name}-gdrive:/crucible-uploads/{instrument_name}/{relative_folder_path}"
+    logger.info(f'Copying {session_folder_path} to {dest}')
+    
+    try:
+        run_rclone_command(session_folder_path, dest, 'copy', background=True)
+    except Exception as e:
+        logger.error(f'rclone copy for {session_folder_path} to google drive failed with error {e}')
 
 
 def _compute_sha256(file_path: str) -> str:
@@ -316,9 +335,7 @@ def create_dataset(files: list[str],
                    session_name: str | None = None,
                    dsid: str | None = None,
                    kw_list: list[str] = [],
-                   comments: str | None = None,
-                   ingestor: str | None = None,
-                   excluded_uuids: list[str] = []) -> str:
+                   comments: str | None = None) -> str:
     logger = get_run_logger()
 
     ds_kwargs = {k: v for k, v in dict(
@@ -330,15 +347,12 @@ def create_dataset(files: list[str],
     ).items() if v is not None}
     ds = BaseDataset(**ds_kwargs)
     scimd = {'comments': comments} if comments else {}
-    if excluded_uuids:
-        scimd['skipped thin films'] = excluded_uuids
     try:
         new_ds = client.datasets.create(
             ds,
             scientific_metadata=scimd,
             keywords=kw_list,
             files_to_upload=files,
-            ingestor=ingestor or None,
             wait_for_ingestion_response=True,
         )
     except Exception:
@@ -365,56 +379,11 @@ def link_dataset_to_session(new_ds_dsid: str, session_dsid: str | None = None):
 
 
 @task(retries=3, retry_delay_seconds=5)
-def link_dataset_and_sample(new_ds_dsid: str, sample_unique_id: str | list[str] | None = None):
-    if not sample_unique_id:
-        return None
-    uuids = [sample_unique_id] if isinstance(sample_unique_id, str) else sample_unique_id
-    for uid in uuids:
-        client.samples.add_to_dataset(dataset_id=new_ds_dsid, sample_id=uid)
-    return len(uuids)
-
-def list_ingestors() -> list[str]:
-    raw = client.ingestions.list_ingestors() or []
-    result = []
-    for item in raw:
-        for name in str(item).split(','):
-            name = name.strip()
-            if name:
-                result.append(name)
-    return result
-
-
-def resolve_holders(instrument: str, holder_uuids: list[str], layout_name: str = '') -> list[dict]:
-    """Fetch child samples for each holder UUID and return a single merged grid entry."""
-    from instruments.registry import INSTRUMENT_HOLDER_LAYOUTS
-    layouts = INSTRUMENT_HOLDER_LAYOUTS.get(instrument, {})
-    layout = layouts.get(layout_name) or next(iter(layouts.values()), [])
-    all_samples = []
-    labels = []
-    pos = 1
-    for i, uuid in enumerate(holder_uuids):
-        if not uuid:
-            continue
-        holder_cfg = layout[i] if i < len(layout) else {}
-        labels.append(holder_cfg.get('label', f'Holder {i + 1}'))
-        slots = holder_cfg.get('slots', 8)
-        children = sorted(client.samples.list_children(uuid), key=lambda c: c.get('sample_name', ''))
-        for j in range(slots):
-            if j < len(children):
-                c = children[j]
-                all_samples.append({
-                    'position': f'S{pos:02d}',
-                    'name': c.get('sample_name') or '',
-                    'uuid': c.get('unique_id') or '',
-                    'excluded': False,
-                })
-            else:
-                all_samples.append({'position': f'S{pos:02d}', 'name': '', 'uuid': '', 'excluded': False})
-            pos += 1
-    basename = ' + '.join(labels) if labels else 'Holders'
-    file_key = ','.join(u for u in holder_uuids if u)
-    return [{'basename': basename, 'file': file_key, 'samples': all_samples}]
-
+def link_dataset_and_sample(new_ds_dsid: str, sample_unique_id: str | None = None):
+    if sample_unique_id is not None:
+        response = client.samples.add_to_dataset(dataset_id = new_ds_dsid, sample_id = sample_unique_id)
+        return response
+    return None
 
 @task(retries=3, retry_delay_seconds=5)
 def request_post_processing(name: str, new_ds_dsid: str):
@@ -447,10 +416,8 @@ def upload_dataset(files: list,
                    dsid: str | None = None,
                    sample_unique_id: str | None = None,
                    kw_list: list[str] = [],
-                   comments: str | None = None,
-                   ingestor: str | None = None) -> str:
-    from instruments.registry import POST_PROCESSING_REQUESTS
-    from instrument_conf import CHAIN_POST_PROCESSING
+                   comments: str | None = None) -> str:
+    from instrument_conf import POST_PROCESSING_REQUESTS, CHAIN_POST_PROCESSING
 
     new_ds_dsid = create_dataset(files=files,
                                  instrument_name=instrument_name,
@@ -459,8 +426,7 @@ def upload_dataset(files: list,
                                  session_name=session_name,
                                  dsid=dsid,
                                  kw_list=kw_list,
-                                 comments=comments,
-                                 ingestor=ingestor)
+                                 comments=comments)
 
     link_dataset_to_session(new_ds_dsid, session_dsid)
     link_dataset_and_sample(new_ds_dsid, sample_unique_id)
@@ -481,8 +447,7 @@ def upload_dataset(files: list,
 @flow(flow_run_name=_run_name("session"))
 def session_upload(file: str, instrument_name: str, project_id: str, orcid: str,
                        sample_unique_id: str | None = None, session_dsid: str | None = None,
-                       kw_list: list[str] = [], comments: str | None = None,
-                       ingestor: str | None = None) -> str:
+                       kw_list: list[str] = [], comments: str | None = None) -> str:
     import time
     import os
     import requests as req
@@ -492,6 +457,8 @@ def session_upload(file: str, instrument_name: str, project_id: str, orcid: str,
     session_folder_path = file
 
     check_session_depth(session_folder_path)
+
+    copy_all_files_to_gdrive(session_folder_path, instrument_name)
 
     session_name, session_dsid = create_session(
         session_folder_path, kw_list, comments or "",
@@ -531,7 +498,6 @@ def session_upload(file: str, instrument_name: str, project_id: str, orcid: str,
                 "sample_unique_id": sample_unique_id,
                 "kw_list": kw_list,
                 "comments": comments,
-                "ingestor": ingestor,
             },
             timeout=0,
         )
@@ -580,8 +546,7 @@ def multi_file_upload(files: list[str],
                       orcid: str,
                       sample_unique_id: str | None = None,
                       kw_list: list[str] = [],
-                      comments: str | None = None,
-                      ingestor: str | None = None) -> list[str]:
+                      comments: str | None = None) -> list[str]:
     import time
     from prefect.deployments import run_deployment
     logger = get_run_logger()
@@ -607,7 +572,6 @@ def multi_file_upload(files: list[str],
                 "sample_unique_id": sample_unique_id,
                 "kw_list": kw_list,
                 "comments": comments,
-                "ingestor": ingestor,
             },
             timeout=0,
         )
@@ -616,42 +580,3 @@ def multi_file_upload(files: list[str],
 
     return submitted
 
-
-@flow(flow_run_name=_run_name("multi-assignment"))
-def multi_assignment_upload(file: str,
-                   sample_uuids: list[str],
-                   project_id: str,
-                   orcid: str,
-                   instrument_name: str = "",
-                   dsid: str | None = None,
-                   kw_list: list[str] = [],
-                   comments: str | None = None,
-                   ingestor: str | None = None,
-                   excluded_uuids: list[str] = [],
-                   link_samples: bool = False) -> str:
-    from instruments.registry import POST_PROCESSING_REQUESTS
-    from instrument_conf import CHAIN_POST_PROCESSING
-    logger = get_run_logger()
-
-    new_dsid = create_dataset(files=[file],
-                              instrument_name=instrument_name,
-                              project_id=project_id,
-                              orcid=orcid,
-                              dsid=dsid,
-                              kw_list=kw_list,
-                              comments=comments,
-                              ingestor=ingestor,
-                              excluded_uuids=excluded_uuids)
-    if link_samples and sample_uuids:
-        link_dataset_and_sample(new_dsid, sample_uuids)
-        logger.info(f"Linked {len(sample_uuids)} samples to dataset {new_dsid}")
-
-    requests = POST_PROCESSING_REQUESTS.get(instrument_name, [])
-    if CHAIN_POST_PROCESSING:
-        for name in requests:
-            request_post_processing(name, new_dsid)
-    else:
-        for name in requests:
-            request_post_processing.submit(name, new_dsid)
-
-    return new_dsid
