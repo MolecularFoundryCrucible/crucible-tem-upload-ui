@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 import subprocess as sp
 from crucible import CrucibleClient
-from crucible.models import BaseDataset
+from crucible.models import Dataset, Sample
 import logging
 from prefect import flow, task
 from prefect.logging import get_run_logger
@@ -92,14 +92,15 @@ def lookup_user_by_email(email: str) -> dict:
 
 
 def _format_sample(sample: dict) -> dict:
+    created = sample.get('timestamp') or sample.get('creation_time') or ''
     parts = [f"Type: {sample.get('sample_type', '')}",
-             f"Created: {sample.get('date_created', '')}",
+             f"Created: {created}",
              sample.get("description", "")]
     return {
         'unique_id': sample['unique_id'],
         'sample_name': sample['sample_name'],
         'sample_type': sample.get('sample_type', ''),
-        'date_created': sample.get('date_created', ''),
+        'date_created': created,
         'description': "\n".join(p for p in parts if p),
     }
 
@@ -117,7 +118,7 @@ def find_samples(sample_name: str | None = None, sample_unique_id: str | None = 
     """
     kwargs = {k: v for k, v in {
         "sample_name": sample_name,
-        "unique_id": sample_unique_id,   # client.list_samples expects "unique_id"
+        "unique_id": sample_unique_id,
         "project_id": project_id,
     }.items() if v is not None}
 
@@ -139,17 +140,17 @@ def create_sample(sample_name: str,
                   timestamp: str | None = None,
                   sample_type: str | None = None) -> dict:
     
-    kwargs = {k: v for k, v in {
+    fields = {k: v for k, v in {
         "unique_id": unique_id,
         "sample_name": sample_name,
         "description": description,
         "timestamp": timestamp,
         "project_id": project_id,
         "sample_type": sample_type,
-        "owner_user_id": owner_orcid,
+        "owner_orcid": owner_orcid,
     }.items() if v is not None}
 
-    result = client.samples.create(**kwargs)
+    result = client.samples.create(Sample(**fields))
 
     logger.info(f"Created sample: {result}")
     return {
@@ -208,12 +209,12 @@ def create_session(session_folder_path: str, kw_list: list[str], comments: str, 
     if session_dsid is not None and session_dsid != "new":
         use_session_dsid = session_dsid
     else:
-        session_ds = BaseDataset(dataset_name=dsname,
-                                owner_orcid=orcid,
-                                project_id=project_id,
-                                instrument_name=instrument_name,
-                                measurement=f'full {instrument_name} session',
-                                session_name=session_name)
+        session_ds = Dataset(dataset_name=dsname,
+                             owner_orcid=orcid,
+                             project_id=project_id,
+                             instrument_name=instrument_name,
+                             measurement=f'full {instrument_name} session',
+                             session_name=session_name)
 
         new_sess_ds = client.datasets.create(session_ds,
                                             scientific_metadata={'comments': comments},
@@ -262,7 +263,7 @@ def resolve_dsid_for_file(file_path: str, valid_dsids: set[str] | None = None) -
     """
     import mfid
     sha = _compute_sha256(file_path)
-    for f in client.files.list_files(sha256_hash=sha):
+    for f in client.files.list(sha256_hash=sha):
         match_dsid = f.get('dataset_mfid')
         if match_dsid and (valid_dsids is None or match_dsid in valid_dsids):
             return match_dsid, True
@@ -333,7 +334,7 @@ def create_dataset(files: list[str],
         instrument_name=instrument_name,
         session_name=session_name,
     ).items() if v is not None}
-    ds = BaseDataset(**ds_kwargs)
+    ds = Dataset(**ds_kwargs)
     scimd = {'comments': comments} if comments else {}
     try:
         new_ds = client.datasets.create(

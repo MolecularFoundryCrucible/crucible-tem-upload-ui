@@ -1,10 +1,10 @@
 import os
 HOME = os.environ.get('HOME')
 
-DEFAULT_BROWSE_DIR = f'{HOME}/Documents'
+DEFAULT_BROWSE_DIR = '/Users/mkwall/Documents'
 # True  = pick a folder; create parent session dataset + one child dataset per file inside
 # False = pick one or more files; each becomes its own standalone dataset (or insitu, per instrument)
-IS_SESSION = True
+IS_SESSION = False
 INSTRUMENTS = ['titanx', 'themis', 'team1', 'team05', 'spectre', 'insitu_pl', 'spinbot']
 DEFAULT_INSTRUMENT_NAME = 'titanx'
 
@@ -26,7 +26,7 @@ POST_PROCESSING_REQUESTS = {
 # False = request all of them in parallel (independent of each other).
 CHAIN_POST_PROCESSING = True
 
-PRINT_BARCODE_ENABLED = False
+PRINT_BARCODE_ENABLED = True
 ACCEPTABLE_FILE_TYPES = {'.bcf', '.dm3', '.dm4', '.emd', '.h5', '.mcr', '.ser'}
 
 '''
