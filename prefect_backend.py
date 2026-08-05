@@ -38,30 +38,6 @@ def run_shell(cmd: str, checkflag: bool = True, background: bool = False) -> sp.
     return sp.run(cmd, stdout=sp.PIPE, stderr=sp.STDOUT, shell=True, universal_newlines=True, check=checkflag)
 
 
-def run_rclone_command(source_path: str = "", destination_path: str = "", cmd: str = "copy",
-                       background: bool = False, checkflag: bool = True, dry_run = False) -> sp.CompletedProcess | sp.Popen:
-    if len(destination_path.strip()) > 0:
-        destination_path = f'"{destination_path}"'
-    
-    source_path, destination_path = (x.replace(":gcs", "") for x in (source_path, destination_path))
-    
-    rclone_cmd = f'rclone {cmd} "{source_path}" {destination_path}'
-
-    # Dry run first — check both exit code and output for errors
-    if dry_run:
-        dry_run = run_shell(f'{rclone_cmd} --dry-run', background=False, checkflag=False)
-        if dry_run.returncode != 0 or "ERROR" in (dry_run.stdout or "").upper():
-            msg = (
-                f"rclone dry run failed. Please check your rclone configuration "
-                f"with `rclone config`.\n{dry_run.stdout or ''}"
-            )
-            logger.error(msg)
-            raise RuntimeError(msg)
-
-    # Real copy
-    logger.info(f'copying file {source_path=} to {destination_path=}')
-    return run_shell(rclone_cmd, background=background, checkflag=checkflag)
-
 
 def lookup_user_by_email(email: str) -> dict:
     """
@@ -292,20 +268,6 @@ def identify_session_files(session_folder_path: str) -> list[str]:
     ]
 
 
-@task(retries=3, retry_delay_seconds=10)
-def copy_all_files_to_gdrive(session_folder_path: str, instrument_name: str) -> None:
-    logger = get_run_logger()
-    p = Path(session_folder_path)
-    relative_folder_path = p.relative_to(p.anchor).as_posix()
-    dest = f"{instrument_name}-gdrive:/crucible-uploads/{instrument_name}/{relative_folder_path}"
-    logger.info(f'Copying {session_folder_path} to {dest}')
-    
-    try:
-        run_rclone_command(session_folder_path, dest, 'copy', background=True)
-    except Exception as e:
-        logger.error(f'rclone copy for {session_folder_path} to google drive failed with error {e}')
-
-
 def _compute_sha256(file_path: str) -> str:
     import hashlib
     _CHUNK = 32 * 1024 * 1024
@@ -446,8 +408,6 @@ def session_upload(file: str, instrument_name: str, project_id: str, orcid: str,
     session_folder_path = file
 
     check_session_depth(session_folder_path)
-
-    copy_all_files_to_gdrive(session_folder_path, instrument_name)
 
     session_name, session_dsid = create_session(
         session_folder_path, kw_list, comments or "",

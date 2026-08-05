@@ -16,6 +16,7 @@ test-data/*
 # run info
 .env
 .flow_results
+*.log
 
 # other
 .DS_Store
