@@ -30,7 +30,6 @@ Once data is uploaded it can be viewed in the [Crucible Web Explorer](https://cr
 - internet connection
 - access to the local file system
 - python >= 3.13
-- [rclone](https://rclone.org/install/)
 - (recommended) [uv](https://docs.astral.sh/uv/getting-started/installation/#standalone-installer) `pipx install uv`
 
 ### Set Up
@@ -44,33 +43,7 @@ uv sync
 ```
 crucible config init
 ```
-4. Configure rclone `rclone config`. You will need to configure 2 remotes:
-    - mf-crucible google cloud storage.<br>
-      ** Please name the mount ```mf-cloud-storage```<br>
-      ** This will require access to the project. If you need access, please reach out to a member of the Molecular Foundry Data team.<br>
-    - (optional) A google drive that you would like data from the instrument to be copied to.<br>
-      ** Please name the mount in the format ```{instrument_name}-gdrive```
-
-An example configuration file is included below: 
-```
-[titanx-gdrive]
-type = drive
-scope = drive
-team_drive = <team-drive-id>
-root_folder_id = 
-token = {} # alternatively you can provide a service account key and add the service account email to your google shared drive.
-
-
-[mf-cloud-storage]
-type = google cloud storage
-project_number = mf-crucible
-service_account_file = <mf-crucible-service-account-key.json>
-object_acl = projectPrivate
-bucket_acl = projectPrivate
-env_auth = true
-bucket_policy_only = true
-```
-5. Run the app!
+4. Run the app!
 
 ### Running the app
 The app runs as three coordinated processes: a local **Prefect server** (orchestration), **`serve_flows.py`** (registers and serves the upload flows as Prefect deployments), and the **Flask UI** (`main.py`). The provided start scripts launch all three together and shut them down on exit.
