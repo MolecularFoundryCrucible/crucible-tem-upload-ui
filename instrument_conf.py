@@ -1,11 +1,12 @@
 import os
 HOME = os.environ.get('HOME')
 
-DEFAULT_BROWSE_DIR = '/Users/mkwall/Documents'
+DEFAULT_BROWSE_DIR = '/path/to/central/data-dir'
+
 # True  = pick a folder; create parent session dataset + one child dataset per file inside
 # False = pick one or more files; each becomes its own standalone dataset (or insitu, per instrument)
-IS_SESSION = False
-INSTRUMENTS = ['titanx', 'themis', 'team1', 'team05', 'spectre', 'insitu_pl', 'spinbot']
+IS_SESSION = True
+INSTRUMENTS = ['titanx', 'themis', 'team1', 'team05', 'spectre', 'f200','insitu_pl', 'spinbot']
 DEFAULT_INSTRUMENT_NAME = 'titanx'
 
 # Maps session-mode instruments to their Prefect deployment (flow-name/deployment-name).
@@ -27,7 +28,8 @@ POST_PROCESSING_REQUESTS = {
 CHAIN_POST_PROCESSING = True
 
 PRINT_BARCODE_ENABLED = True
-ACCEPTABLE_FILE_TYPES = {'.bcf', '.dm3', '.dm4', '.emd', '.h5', '.mcr', '.ser'}
+ACCEPTABLE_FILE_TYPES = {'.bcf', '.dm3', '.dm4', '.emd', '.h5', '.mcr', '.ser', '.csv',
+                         '.png', '.bmp', '.tif', '.jpeg', '.xls', '.mtd', '.txt'}
 
 '''
 To enable barcode printing: 
