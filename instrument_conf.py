@@ -28,7 +28,7 @@ POST_PROCESSING_REQUESTS = {
 CHAIN_POST_PROCESSING = True
 
 PRINT_BARCODE_ENABLED = True
-ACCEPTABLE_FILE_TYPES = {'.bcf', '.dm3', '.dm4', '.emd', '.h5', '.mcr', '.ser', '.csv',
+ACCEPTABLE_FILE_TYPES = {'.bcf', '.dm3', '.dm4', '.emd', '.h5', '.mrc', '.ser', '.csv',
                          '.png', '.bmp', '.tif', '.jpeg', '.xls', '.mtd', '.txt'}
 
 '''
