@@ -22,7 +22,7 @@ class MultipleSessionsFound(Exception):
 
 
 try:
-    client = CrucibleClient(api_url = 'https://crucible.lbl.gov/api/v2')
+    client = CrucibleClient(api_url = 'https://crucible.lbl.gov/3')
     assert client.api_key is not None
     logger.info(f'Connected to Crucible Client with API url: {client.api_url}')
 
