@@ -6,7 +6,7 @@ DEFAULT_BROWSE_DIR = '/path/to/central/data-dir'
 # True  = pick a folder; create parent session dataset + one child dataset per file inside
 # False = pick one or more files; each becomes its own standalone dataset (or insitu, per instrument)
 IS_SESSION = True
-INSTRUMENTS = ['titanx', 'themis', 'team1', 'team05', 'spectre', 'f200','insitu_pl', 'spinbot']
+INSTRUMENTS = ['titanx', 'themis', 'team1', 'team05', 'spectre', 'f200','in-situ-pl', 'spinbot']
 DEFAULT_INSTRUMENT_NAME = 'titanx'
 
 # Maps session-mode instruments to their Prefect deployment (flow-name/deployment-name).
