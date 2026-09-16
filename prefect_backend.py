@@ -22,7 +22,7 @@ class MultipleSessionsFound(Exception):
 
 
 try:
-    client = CrucibleClient(api_url = 'https://crucible.lbl.gov/api/v2')
+    client = CrucibleClient(api_url = 'https://crucible.lbl.gov/api/v3')
     assert client.api_key is not None
     logger.info(f'Connected to Crucible Client with API url: {client.api_url}')
 
@@ -30,6 +30,10 @@ except Exception as e:
     logger.error(f'Client connection failed with error {e}. \
                  You can check your Crucible configuration by \
                  running `crucible config show` in the command line')
+
+
+def instrument_id_from_name(instrument_name: str) -> str:
+    return re.sub(r'[^a-z0-9]', '-', instrument_name.lower())
 
 
 def run_shell(cmd: str, checkflag: bool = True, background: bool = False) -> sp.CompletedProcess | sp.Popen:
@@ -190,7 +194,7 @@ def create_session(session_folder_path: str, kw_list: list[str], comments: str, 
         session_ds = Dataset(dataset_name=dsname,
                              owner_orcid=orcid,
                              project_id=project_id,
-                             instrument_name=instrument_name,
+                             instrument_id=instrument_id_from_name(instrument_name),
                              measurement=f'full {instrument_name} session',
                              session_name=session_name)
 
@@ -295,7 +299,7 @@ def create_dataset(files: list[str],
         unique_id=dsid,
         owner_orcid=orcid,
         project_id=project_id,
-        instrument_name=instrument_name,
+        instrument_id=instrument_id_from_name(instrument_name) if instrument_name else None,
         session_name=session_name,
     ).items() if v is not None}
     ds = Dataset(**ds_kwargs)
