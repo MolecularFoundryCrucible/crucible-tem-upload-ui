@@ -433,8 +433,19 @@ def session_upload(file: str, instrument_name: str, project_id: str, orcid: str,
     for f, (dsid, existed) in zip(session_files, resolved):
         time.sleep(0.3)
         dsfiles = [f]
+        f_path = Path(f)
         if f.endswith('ser'):
             dsfiles.append(get_emi_file_name(f))
+
+        # Add extra files for FEI MRC tomography datasets: .rawtlt and .txt (FEI parameters)
+        if f_path.suffix.lower() == '.mrc':
+            rawtltName = f_path.with_suffix('.rawtlt')
+            if rawtltName.exists():
+                dsfiles.append(str(rawtltName))
+
+            FEIparameters = f_path.with_suffix('.txt')
+            if FEIparameters.exists():
+                dsfiles.append(str(FEIparameters))
 
         logger.info(f"{Path(f).name}: {'reusing existing' if existed else 'new'} dsid {dsid}")
 
