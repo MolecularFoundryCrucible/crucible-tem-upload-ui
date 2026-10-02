@@ -150,10 +150,12 @@ def print_sample_barcode(sample_unique_id, sample_name):
     return
 
 
-def get_emi_file_name(serfile: str) -> str:
-    no_ext = serfile.split(".ser")[0]
-    no_rep = re.sub('_[0-9]*$', '', no_ext)
-    return f"{no_rep}.emi"
+def get_emi_file_name(ser_path: Path) -> str:
+    """Find the corresponding EMI file for a SER file.
+    """
+    # Remove trailing _# from the stem and change extension to .emi
+    stem = re.sub(r'_\d+$', '', ser_path.stem)
+    return str(ser_path.with_name(f"{stem}.emi"))
 
 def check_session_depth(session_folder_path: str, min_depth: int = 1) -> None:
     parts = Path(session_folder_path).resolve().parts
@@ -434,6 +436,7 @@ def session_upload(file: str, instrument_name: str, project_id: str, orcid: str,
         time.sleep(0.3)
         dsfiles = [f]
         f_path = Path(f)
+
         if f.endswith('ser'):
             dsfiles.append(get_emi_file_name(f))
 
@@ -448,7 +451,7 @@ def session_upload(file: str, instrument_name: str, project_id: str, orcid: str,
                 dsfiles.append(str(FEIparameters))
 
         logger.info(f"{Path(f).name}: {'reusing existing' if existed else 'new'} dsid {dsid}")
-
+        
         run = run_deployment(
             "upload-dataset/upload-dataset",
             parameters={
