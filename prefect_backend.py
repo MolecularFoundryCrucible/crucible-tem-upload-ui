@@ -153,6 +153,8 @@ def print_sample_barcode(sample_unique_id, sample_name):
 def get_emi_file_name(ser_path: Path) -> str:
     """Find the corresponding EMI file for a SER file.
     """
+    if isinstance(ser_path, str):
+        ser_path = Path(ser_path)
     # Remove trailing _# from the stem and change extension to .emi
     stem = re.sub(r'_\d+$', '', ser_path.stem)
     return str(ser_path.with_name(f"{stem}.emi"))
